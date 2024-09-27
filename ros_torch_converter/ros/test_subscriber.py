@@ -3,20 +3,18 @@ from rclpy.node import Node
 
 from std_msgs.msg import String
 
-class MinimalSubscriber(Node):
 
+class MinimalSubscriber(Node):
     def __init__(self):
-        super().__init__('minimal_subsriber')
+        super().__init__("minimal_subsriber")
         self.subscription = self.create_subscription(
-            String,
-            'aaa',
-            self.listener_callback,
-            10
+            String, "aaa", self.listener_callback, 10
         )
         self.subscription
 
     def listener_callback(self, msg):
-        self.get_logger().info('received: {}'.format(msg.data))
+        self.get_logger().info("received: {}".format(msg.data))
+
 
 def main(args=None):
     rclpy.init(args=args)
@@ -28,5 +26,6 @@ def main(args=None):
     minimal_subscriber.destroy_node()
     rclpy.shutdown()
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     main()

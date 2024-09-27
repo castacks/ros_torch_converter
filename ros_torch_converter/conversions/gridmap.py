@@ -5,6 +5,7 @@ from grid_map_msgs.msg import GridMap
 
 from ros_torch_converter.conversions.base import Conversion
 
+
 class GridMapToTorchMap(Conversion):
     """Convert a GridMap to a torch gridmap
 
@@ -29,13 +30,17 @@ class GridMapToTorchMap(Conversion):
         return GridMap
 
     def cvt(self, msg):
-        orientation = np.array([
-            msg.info.pose.orientation.x,
-            msg.info.pose.orientation.y,
-            msg.info.pose.orientation.z,
-            msg.info.pose.orientation.w,
-            ])
-        assert np.allclose(orientation, np.array([0., 0., 0., 1.])), "ERROR: we dont support rotated gridmaps"
+        orientation = np.array(
+            [
+                msg.info.pose.orientation.x,
+                msg.info.pose.orientation.y,
+                msg.info.pose.orientation.z,
+                msg.info.pose.orientation.w,
+            ]
+        )
+        assert np.allclose(
+            orientation, np.array([0.0, 0.0, 0.0, 1.0])
+        ), "ERROR: we dont support rotated gridmaps"
 
         if len(self.feature_keys) == 0:
             layers_to_extract = msg.layers
@@ -43,25 +48,21 @@ class GridMapToTorchMap(Conversion):
             layers_to_extract = [x for x in msg.layers if x in self.feature_keys]
 
         if len(layers_to_extract) != len(self.feature_keys):
-            print('warning: not all expected layers are in received gridmap!')
+            print("warning: not all expected layers are in received gridmap!")
 
         metadata = {
-            'origin': torch.tensor([
-                msg.info.pose.position.x - 0.5*msg.info.length_x,
-                msg.info.pose.position.y - 0.5*msg.info.length_y
-            ]),
-            'length': torch.tensor([
-                msg.info.length_x,
-                msg.info.length_y
-            ]),
-            'resolution': torch.tensor([
-                msg.info.resolution,
-                msg.info.resolution
-            ])
+            "origin": torch.tensor(
+                [
+                    msg.info.pose.position.x - 0.5 * msg.info.length_x,
+                    msg.info.pose.position.y - 0.5 * msg.info.length_y,
+                ]
+            ),
+            "length": torch.tensor([msg.info.length_x, msg.info.length_y]),
+            "resolution": torch.tensor([msg.info.resolution, msg.info.resolution]),
         }
-        
-        nx = round(msg.info.length_x/msg.info.resolution)
-        ny = round(msg.info.length_y/msg.info.resolution)
+
+        nx = round(msg.info.length_x / msg.info.resolution)
+        ny = round(msg.info.length_y / msg.info.resolution)
         res = []
 
         for layer in layers_to_extract:
@@ -72,9 +73,4 @@ class GridMapToTorchMap(Conversion):
 
         res = torch.stack(res, axis=0)
 
-        return {
-            'data': res,
-            'metadata': metadata,
-            'feature_keys': layers_to_extract
-        }        
-
+        return {"data": res, "metadata": metadata, "feature_keys": layers_to_extract}

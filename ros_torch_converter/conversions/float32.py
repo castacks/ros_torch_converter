@@ -4,9 +4,10 @@ from std_msgs.msg import Float32
 
 from ros_torch_converter.conversions.base import Conversion
 
+
 class Float32ToFloatTensor(Conversion):
-    """Convert a Float32
-    """
+    """Convert a Float32"""
+
     def __init__(self):
         pass
 
