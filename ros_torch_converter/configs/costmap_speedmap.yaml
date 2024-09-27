@@ -1,0 +1,24 @@
+---
+ros:
+    max_age: 1.
+    topics:
+        - name: state
+          topic: /integrated_to_init
+          type: OdometryToPoseTwist
+          args: {}
+
+        - name: steer_angle
+          topic: /ros_talon/current_position
+          type: Float32ToFloatTensor
+          args: {}
+
+        - name: local_costmap
+          topic: /local_costmap
+          type: GridMapToTorchMap
+          args:
+            feature_keys: [costmap]
+
+        - name: waypoints
+          topic: /next_waypoints/odom
+          type: PoseArrayTo2DGoalArray
+          args: {}
