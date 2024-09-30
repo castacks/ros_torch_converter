@@ -26,11 +26,7 @@ class MPLPlotter(Node):
         plt.show(block=False)
 
         self.pos_buf = np.zeros([0, 2])
-        self.speed_buf = np.zeros(
-            [
-                0,
-            ]
-        )
+        self.speed_buf = np.zeros([0, ])
 
         self.get_logger().info("plotter ready")
 
@@ -73,7 +69,7 @@ class MPLPlotter(Node):
 
 
 def main(args=None):
-    config_fp = "/home/tartandriver/tartandriver_ws/src/core/ros_torch_converter/ros_torch_converter/configs/costmap_speedmap.yaml"
+    config_fp = "/home/tartandriver/tartandriver_ws/src/core/ros_torch_converter/configs/costmap_speedmap.yaml"
     config = yaml.safe_load(open(config_fp, "r"))["ros"]
 
     rclpy.init(args=args)
