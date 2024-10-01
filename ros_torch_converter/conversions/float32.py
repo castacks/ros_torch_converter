@@ -16,4 +16,4 @@ class Float32ToFloatTensor(Conversion):
         return Float32
 
     def cvt(self, msg):
-        return torch.tensor(msg.data)
+        return torch.tensor([msg.data])
