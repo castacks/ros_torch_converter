@@ -33,7 +33,7 @@ class ROSTorchConverter(Node):
     """
 
     def __init__(self, config):
-        super().__init__("ros_torch_converter_node")
+        super().__init__("ros_torch_converter_node", use_global_arguments=False)
 
         self.config = config
         self.subscribers = {}
