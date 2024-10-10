@@ -45,7 +45,7 @@ class GridMapToTorchMap(Conversion):
         if len(self.feature_keys) == 0:
             layers_to_extract = msg.layers
         else:
-            layers_to_extract = [x for x in msg.layers if x in self.feature_keys]
+            layers_to_extract = [x for x in self.feature_keys if x in msg.layers]
 
         if len(layers_to_extract) != len(self.feature_keys):
             print("warning: not all expected layers are in received gridmap!")
