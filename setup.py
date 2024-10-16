@@ -24,9 +24,7 @@ setup(
     tests_require=["pytest"],
     entry_points={
         "console_scripts": [
-            "test_pub = ros_torch_converter.ros.test_publisher:main",
-            "test_sub = ros_torch_converter.ros.test_subscriber:main",
-            "debug = ros_torch_converter.ros.debug:main",
+            "converter_debug = ros_torch_converter.ros.converter_node:main",
             "nav_plotter = ros_torch_converter.ros.test_matplotlib_nav_viz:main",
         ],
     },

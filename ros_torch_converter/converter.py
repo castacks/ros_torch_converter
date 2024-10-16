@@ -1,29 +1,28 @@
+import copy
+
 import rclpy
 from rclpy.node import Node
 
-from ros_torch_converter.conversions.float32 import Float32ToFloatTensor
+from torch_coordinator.datatypes.bev_grid import BEVGridTorch
+from torch_coordinator.datatypes.float import Float32Torch
+from torch_coordinator.datatypes.image import ImageTorch, FeatureImageTorch
+from torch_coordinator.datatypes.intrinsics import IntrinsicsTorch
+from torch_coordinator.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
+from torch_coordinator.datatypes.transform import TransformTorch, OdomTransformTorch
 
-from ros_torch_converter.conversions.posearray import PoseArrayTo2DGoalArray
-
-from ros_torch_converter.conversions.odometry import OdometryToPoseTwist, OdometryToPose
-
-from ros_torch_converter.conversions.gridmap import GridMapToTorchMap
+from tartandriver_utils.ros_utils import stamp_to_time
 
 str_to_cvt_class = {
-    "Float32ToFloatTensor": Float32ToFloatTensor,
-    "OdometryToPoseTwist": OdometryToPoseTwist,
-    "OdometryToPose": OdometryToPose,
-    "PoseArrayTo2DGoalArray": PoseArrayTo2DGoalArray,
-    "GridMapToTorchMap": GridMapToTorchMap,
+    "BEVGrid": BEVGridTorch,
+    "Float32": Float32Torch,
+    "Image": ImageTorch,
+    "FeatureImage": FeatureImageTorch,
+    "Intrinsics": IntrinsicsTorch,
+    "PointCloud": PointCloudTorch,
+    "FeaturePointCloud": FeaturePointCloudTorch,
+    "Transform": TransformTorch,
+    "OdomTransform": OdomTransformTorch
 }
-
-
-def get_ns_in_sec():  # TODO: move to utils
-    return (
-        rclpy.clock.Clock().now().to_msg().sec
-        + rclpy.clock.Clock().now().to_msg().nanosec * 1e-9
-    )
-
 
 class ROSTorchConverter(Node):
     """Top-level class that manages conversion from ROS->torch.
@@ -32,64 +31,78 @@ class ROSTorchConverter(Node):
     When it is asked for data, it will convert all the messages to torch and return them as a (potentially nested) dict
     """
 
-    def __init__(self, config):
-        super().__init__("ros_torch_converter_node", use_global_arguments=False)
+    def __init__(self, config, name=""):
+        super().__init__(name + "_ros_torch_converter_node")
 
         self.config = config
+        self.device = self.config['device']
         self.subscribers = {}
         self.converters = {}
 
         self.data = {}
         self.data_times = {}
 
+        self.lock = False
+
         self.setup_subscribers()
 
         self.get_logger().info("cvt node ready")
 
     def setup_subscribers(self):
+        #TODO: Setup an option using message_filters.TimeSynchronizer
         for topic_conf in self.config["topics"]:
             self.data[topic_conf["name"]] = None
             self.data_times[topic_conf["name"]] = -1.0
 
-            self.converters[topic_conf["name"]] = str_to_cvt_class[topic_conf["type"]](
-                **topic_conf["args"]
-            )
+            self.converters[topic_conf["name"]] = str_to_cvt_class[topic_conf["type"]]
+
             sub = self.create_subscription(
-                self.converters[topic_conf["name"]].msg_type,  # Message type
+                self.converters[topic_conf["name"]].from_rosmsg_type,  # Message type
                 topic_conf["topic"],  # Topic name
                 lambda msg, topic_conf=topic_conf: self.handle_msg(
                     msg, topic_conf
                 ),  # Callback with additional args
-                10,  # QoS (default queue size)
+                1,  # QoS (default queue size)
             )
 
     def handle_msg(self, msg, topic_conf):
-        self.data[topic_conf["name"]] = msg
-        self.data_times[topic_conf["name"]] = get_ns_in_sec()
+        if not self.lock:
+            self.data[topic_conf["name"]] = msg
+            try:
+                self.data_times[topic_conf["name"]] = stamp_to_time(msg.header.stamp)
+            except:
+                self.data_times[topic_conf["name"]] = stamp_to_time(self.get_clock().now().to_msg())
 
-    def get_data(self, device="cpu"):
-        return {k: self.converters[k].cvt(msg) for k, msg in self.data.items()}
+    def get_data(self, return_times=False, device="cpu"):
+        self.lock = True
+        data = {k: self.converters[k].from_rosmsg(msg, device=self.device) for k, msg in self.data.items()}
+        times = copy.deepcopy(self.data_times)
+        self.lock = False
+
+        return data, times if return_times else data
 
     def can_get_data(self):
+        curr_time = stamp_to_time(self.get_clock().now().to_msg())
         return all(
             [
-                get_ns_in_sec() - dt < self.config["max_age"]
-                for dt in self.data_times.values()
+                curr_time - data_time < self.config["max_age"]
+                for data_time in self.data_times.values()
             ]
         )
 
     def get_status_str(self):
+        curr_time = stamp_to_time(self.get_clock().now().to_msg())
         out = "\n ---converter status--- \n"
         for topic_conf in self.config["topics"]:
 
             data_exists = self.data[topic_conf["name"]] is not None
-            data_age = get_ns_in_sec() - self.data_times[topic_conf["name"]]
+            data_age = curr_time - self.data_times[topic_conf["name"]]
             out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
                 topic_conf["name"] + " " + topic_conf["topic"] + ":",
                 data_exists,
                 data_age,
             )
 
-        out += "can get data: {}".format(self.can_get_data())
-        out += "\n"
+        out += "can get data: {}\n".format(self.can_get_data())
+        out += "curr time: {}\n".format(curr_time)
         return out
