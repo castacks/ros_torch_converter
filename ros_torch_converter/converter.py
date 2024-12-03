@@ -9,6 +9,8 @@ from torch_coordinator.datatypes.image import ImageTorch, FeatureImageTorch
 from torch_coordinator.datatypes.intrinsics import IntrinsicsTorch
 from torch_coordinator.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
 from torch_coordinator.datatypes.transform import TransformTorch, OdomTransformTorch
+from torch_coordinator.datatypes.rb_state import OdomRBStateTorch
+from torch_coordinator.datatypes.goal_array import GoalArrayTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -21,7 +23,9 @@ str_to_cvt_class = {
     "PointCloud": PointCloudTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
     "Transform": TransformTorch,
-    "OdomTransform": OdomTransformTorch
+    "OdomTransform": OdomTransformTorch,
+    "OdomRBState": OdomRBStateTorch,
+    "GoalArray": GoalArrayTorch
 }
 
 class ROSTorchConverter(Node):
@@ -62,7 +66,7 @@ class ROSTorchConverter(Node):
                 lambda msg, topic_conf=topic_conf: self.handle_msg(
                     msg, topic_conf
                 ),  # Callback with additional args
-                1,  # QoS (default queue size)
+                10,  # QoS (default queue size)
             )
 
     def handle_msg(self, msg, topic_conf):
@@ -79,7 +83,7 @@ class ROSTorchConverter(Node):
         times = copy.deepcopy(self.data_times)
         self.lock = False
 
-        return data, times if return_times else data
+        return (data, times) if return_times else data
 
     def can_get_data(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
