@@ -1,0 +1,10 @@
+*.pyc
+*.bag
+*.mp4
+*.swp
+!models/*.pt
+**/__pycache__**/
+*wandb*
+*.vscode*
+*.png
+test/
