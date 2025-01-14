@@ -2,7 +2,7 @@
 
 This package provides a relatively flexible way of handling topic conversion/subscription for ROS nodes that need a large amount of data converted to torch. 
 
-Currently, this is implemented via a `ROSTorchConverter` object that subscribes to a set of topics/conversions specified in a config yaml. When the converter is queried for data, it will convert the latest received messages to torch and return the resulting dict (TODO: should also return stamps).
+NOTE: The datatypes for this package are currently defined in ```torch_coordinator```.
 
 ## Usage
 
