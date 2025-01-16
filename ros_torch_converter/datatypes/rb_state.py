@@ -1,0 +1,80 @@
+import torch
+
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+
+from nav_msgs.msg import Odometry
+
+from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+
+class OdomRBStateTorch(TorchCoordinatorDataType):
+    """state as [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
+    """
+    to_rosmsg_type = Odometry
+    from_rosmsg_type = Odometry
+    
+    def __init__(self, device='cpu'):
+        super().__init__()
+        self.child_frame_id = ""
+        self.state = torch.zeros(13, device=device)
+        self.device = device
+
+    def from_rosmsg(msg, device):
+        res = OdomRBStateTorch(device=device)
+
+        res.state = torch.tensor([
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z,
+            msg.pose.pose.orientation.x,
+            msg.pose.pose.orientation.y,
+            msg.pose.pose.orientation.z,
+            msg.pose.pose.orientation.w,
+            msg.twist.twist.linear.x,
+            msg.twist.twist.linear.y,
+            msg.twist.twist.linear.z,
+            msg.twist.twist.angular.x,
+            msg.twist.twist.angular.y,
+            msg.twist.twist.angular.z
+        ], device=device).float()
+        
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        res.child_frame_id = msg.child_frame_id
+        return res
+
+    def from_torch(data, child_frame_id):
+        res = OdomRBStateTorch(device=data.device)
+        res.state = data
+        res.child_frame_id = child_frame_id
+
+        return res
+
+    def to_rosmsg(self):
+        msg = Odometry()
+        msg.header.stamp = time_to_stamp(self.time)
+        msg.header.frame_id = self.frame_id
+        msg.child_frame_id = self.child_frame_id
+
+        msg.pose.pose.position.x = self.state[0].item()
+        msg.pose.pose.position.y = self.state[1].item()
+        msg.pose.pose.position.z = self.state[2].item()
+
+        msg.pose.pose.orientation.x = self.state[3].item()
+        msg.pose.pose.orientation.y = self.state[4].item()
+        msg.pose.pose.orientation.z = self.state[5].item()
+        msg.pose.pose.orientation.w = self.state[6].item()
+
+        msg.twist.twist.linear.x = self.state[7].item()
+        msg.twist.twist.linear.y = self.state[8].item()
+        msg.twist.twist.linear.z = self.state[9].item()
+
+        msg.twist.twist.angular.x = self.state[10].item()
+        msg.twist.twist.angular.y = self.state[11].item()
+        msg.twist.twist.angular.z = self.state[12].item()
+
+        return msg
+
+    def to(self, device):
+        self.device = device
+        self.state = self.state.to(device)
+        return self
