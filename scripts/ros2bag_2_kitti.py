@@ -175,7 +175,7 @@ if __name__ == '__main__':
             idxs = np.argwhere(target_diffs < 1e-8).flatten()
 
             if len(idxs) > 0:
-                print('topic {} msg for frames {}'.format(topic, idxs))
+                # print('topic {} msg for frames {}'.format(topic, idxs))
                 checks[topic].append(idxs)
 
                 torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
