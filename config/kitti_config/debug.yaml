@@ -1,24 +1,29 @@
 ---
-  main_topic: '/superodometry/velodyne_cloud_registered'
   dt: 0.1
 
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
   data:
-    - name: odometry
+    - name: super_odometry
       topic: /superodometry/integrated_to_init #namespaced in new bags
       type: OdomRBState
       args: {}
 
-    - name: image_intrinsics
+    - name: multisense_left_intrinsics
       topic: /multisense/left/image_rect_color/camera_info
       type: Intrinsics
       args: {}
 
-    - name: image
+    - name: multisense_left
       topic: /multisense/left/image_rect_color
       type: Image
       args: {}
 
-    - name: pointcloud_in_odom
+    - name: super_odometry_pc
       topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
       type: PointCloud
       args: {}
