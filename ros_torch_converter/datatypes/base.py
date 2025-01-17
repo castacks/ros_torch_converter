@@ -31,6 +31,19 @@ class TorchCoordinatorDataType(abc.ABC):
     def from_rosmsg(msg, device):
         """define how to convert this datatype from a ros message
         """
+        pass
+
+    @abc.abstractmethod
+    def to_kitti(self, base_dir, idx):
+        """define how to convert this dtype to a kitti file
+        """
+        pass
+
+    @abc.abstractmethod
+    def from_kitti(self, base_dir, idx, device):
+        """define how to convert this dtype from a kitti file
+        """
+        pass
 
     @abc.abstractmethod
     def to(self, device):

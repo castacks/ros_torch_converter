@@ -1,6 +1,8 @@
+import os
 import torch
-import ros2_numpy
+import rosbags
 import warnings
+import ros2_numpy
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
@@ -19,7 +21,14 @@ class PointCloudTorch(TorchCoordinatorDataType):
         self.colors = torch.zeros(0, 3, device=device)
         self.device = device
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(msg, device='cpu'):
+        #HACK to get ros2_numpy to cooperate with rosbags dtypes.
+        #TODO write a script to do this for all types
+        if type(msg) != PointCloud2:
+            k = (PointCloud2, False)
+            k2 = (type(msg), False)
+            ros2_numpy.registry._to_numpy[k2] = ros2_numpy.registry._to_numpy[k]
+
         res = PointCloudTorch(device=device)
         pcl_np = ros2_numpy.numpify(msg)
         xyz = np.stack(
@@ -98,6 +107,14 @@ class PointCloudTorch(TorchCoordinatorDataType):
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
         return msg
+
+    def to_kitti(self, base_dir, idx):
+        save_fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
+        pts = self.pts.cpu().numpy()
+        np.save(save_fp, pts)
+
+    def from_kitti(self, base_dir, idx, device):
+        pass
 
     def to(self, device):
         self.device = device

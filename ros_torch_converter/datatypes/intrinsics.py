@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 
@@ -51,6 +52,13 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         msg.header.frame_id = self.frame_id
 
         return msg
+
+    def to_kitti(self, base_dir, idx):
+        save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
+        np.savetxt(save_fp, self.intrinsics.cpu().numpy().flatten())
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
 
     def to(self, device):
         self.device = device

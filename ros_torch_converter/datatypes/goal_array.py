@@ -1,4 +1,6 @@
+import os
 import torch
+import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
@@ -18,7 +20,7 @@ class GoalArrayTorch(TorchCoordinatorDataType):
         self.goals = torch.zeros(0, 3, device=device)
         self.device = device
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(msg, device='cpu'):
         res = GoalArrayTorch(device)
         
         for pose in msg.poses:
@@ -51,6 +53,13 @@ class GoalArrayTorch(TorchCoordinatorDataType):
         msg.header.frame_id = self.frame_id
 
         return msg
+
+    def to_kitti(self, base_dir, idx):
+        save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
+        np.savetxt(save_fp, self.goals.cpu().numpy())
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
     
     def to(self, device):
         self.device = device

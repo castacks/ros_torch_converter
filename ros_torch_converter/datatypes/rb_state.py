@@ -1,4 +1,6 @@
+import os
 import torch
+import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
@@ -18,7 +20,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         self.state = torch.zeros(13, device=device)
         self.device = device
 
-    def from_rosmsg(msg, device):
+    def from_rosmsg(msg, device='cpu'):
         res = OdomRBStateTorch(device=device)
 
         res.state = torch.tensor([
@@ -78,3 +80,30 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         self.device = device
         self.state = self.state.to(device)
         return self
+
+    def to_kitti(self, base_dir, idx):
+        """
+        note that some dtypes  should be stored as rows of a matrix
+        """
+        save_fp = os.path.join(base_dir, "data.txt")
+        if not os.path.exists(save_fp):
+            data = float('inf') * np.ones([idx+1, 13])
+        else:
+            #need to reshape for 1-row data
+            data = np.loadtxt(save_fp).reshape(-1, 13)
+
+        if data.shape[0] < (idx+1):
+            data_new = float('inf') * np.ones([idx+1, 13])
+            data_new[:data.shape[0]] = data
+            data = data_new
+
+        data[idx] = self.state.cpu().numpy()
+
+        np.savetxt(save_fp, data)
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
+
+    def __repr__(self):
+        return "OdomRBStateTorch from {} to {} with x:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.child_frame_id, self.state.cpu().numpy().round(4), self.stamp, self.device)
+    

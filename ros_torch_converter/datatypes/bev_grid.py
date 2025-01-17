@@ -1,8 +1,11 @@
+import os
+import yaml
 import copy
-import warnings
 import torch
-import numpy as np
 import array
+
+import warnings
+import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
@@ -243,6 +246,25 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.header.frame_id = self.frame_id
 
         return gridmap_msg
+
+    def to_kitti(self, base_dir, idx):
+        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+        metadata = {
+            'feature_keys': self.bev_grid.feature_keys,
+            'length': self.bev_grid.metadata.length.cpu().numpy().tolist(),
+            'origin': self.bev_grid.metadata.origin.cpu().numpy().tolist(),
+            'resolution': self.bev_grid.metadata.resolution.cpu().numpy().tolist()
+        }
+
+        yaml.dump(metadata, open(metadata_fp, 'w'), default_flow_style=False)
+
+        data = self.bev_grid.data.cpu().numpy()
+        np.save(data_fp, data)
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
 
     def to(self, device):
         self.device = device

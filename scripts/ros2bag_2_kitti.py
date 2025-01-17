@@ -11,6 +11,8 @@ from rosbags.typesys import Stores, get_typestore
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
+from ros_torch_converter.converter import str_to_cvt_class
+
 """
 Script to create kitti-formatted datasets from ros2 bags
 General algo is something like this:
@@ -57,6 +59,8 @@ if __name__ == '__main__':
     parser.add_argument('--config', type=str, required=True, help='path to config')
     parser.add_argument('--src_dir', type=str, required=True, help='path to input dir')
     parser.add_argument('--dst_dir', type=str, required=True, help='path to output dir')
+    parser.add_argument('--dryrun', action='store_true', help='set this flag to check data w/o parsing it')
+    parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir):
@@ -68,6 +72,8 @@ if __name__ == '__main__':
 
     config = yaml.safe_load(open(args.config, 'r'))
     target_topics = [x['topic'] for x in config['data']]
+    topic_to_msgtype = {x['topic']:x['type'] for x in config['data']}
+    topic_to_name = {x['topic']:x['name'] for x in config['data']}
 
     bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
 
@@ -89,7 +95,11 @@ if __name__ == '__main__':
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
-            msg_time = stamp_to_time(msg.header.stamp)
+
+            if hasattr(msg, "header") and not args.use_bag_time:
+                msg_time = stamp_to_time(msg.header.stamp)
+            else:
+                msg_time = timestamp * 1e-9
 
             tdiffs = queue['target_times'] - msg_time
 
@@ -100,6 +110,24 @@ if __name__ == '__main__':
 
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
+
+    
+    # debug code
+    if args.dryrun:
+        import matplotlib.pyplot as plt
+        plt.plot(queue['target_times'], marker='.', label='target_times')
+
+        for topic in target_topics:
+            times = queue['topic_times'][topic]
+            error = queue['topic_error'][topic]
+            x = np.arange(len(times))
+            mask = error < config['interp_tol']
+            plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
+
+        plt.title('time sync graph')
+        plt.legend()
+        plt.show()
+        exit(0)
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
@@ -127,6 +155,7 @@ if __name__ == '__main__':
 
     checks = {k:[] for k in target_topics}
 
+    # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
 
@@ -135,7 +164,12 @@ if __name__ == '__main__':
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
-            msg_time = stamp_to_time(msg.header.stamp)
+            name = topic_to_name[topic]
+
+            if hasattr(msg, "header") and not args.use_bag_time:
+                msg_time = stamp_to_time(msg.header.stamp)
+            else:
+                msg_time = timestamp * 1e-9
                 
             target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
             idxs = np.argwhere(target_diffs < 1e-8).flatten()
@@ -144,24 +178,19 @@ if __name__ == '__main__':
                 print('topic {} msg for frames {}'.format(topic, idxs))
                 checks[topic].append(idxs)
 
+                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
+                torch_data = torch_dtype.from_rosmsg(msg)
+
+                base_dir = os.path.join(args.dst_dir, name)
+                for idx in idxs:
+                    torch_data.to_kitti(base_dir, idx)
+
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
 
+    print('Done processing {} frames.'.format(queue['target_times'].shape[0]))
+
     for topic, idxs in checks.items():
-        valid = all(idxs == np.arange(all_valid_mask.sum()))
-        print('{} valid: {}'.format(topic, valid))
+        valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+        print('{} has all frames: {}'.format(topic, valid))
 
-    # debug code
-    # import matplotlib.pyplot as plt
-    # plt.plot(queue['target_times'], marker='.', label='target_times')
-
-    # for topic in target_topics:
-    #     times = queue['topic_times'][topic]
-    #     error = queue['topic_error'][topic]
-    #     x = np.arange(len(times))
-    #     mask = error < config['interp_tol']
-    #     plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
-
-    # plt.title('time sync graph')
-    # plt.legend()
-    # plt.show()

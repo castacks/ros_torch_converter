@@ -1,3 +1,5 @@
+import os
+import cv2
 import torch
 import cv_bridge
 import warnings
@@ -60,6 +62,14 @@ class ImageTorch(TorchCoordinatorDataType):
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
+
+    def to_kitti(self, base_dir, idx):
+        save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        img = (self.image * 255.).long().cpu().numpy()
+        cv2.imwrite(save_fp, img)
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
 
     def to(self, device):
         self.device = device
