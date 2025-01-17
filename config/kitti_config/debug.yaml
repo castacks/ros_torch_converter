@@ -8,7 +8,7 @@
   backward_interpolation: false
 
   data:
-    - name: super_odometry
+    - name: odom
       topic: /superodometry/integrated_to_init #namespaced in new bags
       type: OdomRBState
       args: {}
@@ -23,9 +23,14 @@
       type: Intrinsics
       args: {}
 
-    - name: multisense_left
+    - name: image_left_color
       topic: /multisense/left/image_rect_color
       type: Image
+      args: {}
+
+    - name: pcl
+      topic: /velodyne_1/velodyne_points
+      type: PointCloud
       args: {}
 
     - name: super_odometry_pc

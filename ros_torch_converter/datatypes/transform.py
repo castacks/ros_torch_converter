@@ -73,6 +73,16 @@ class TransformTorch(TorchCoordinatorDataType):
         self.transform = self.transform.to(device)
         return self
     
+    def to_kitti(self, base_dir, idx):
+        """define how to convert this dtype to a kitti file
+        """
+        pass
+
+    def from_kitti(self, base_dir, idx, device):
+        """define how to convert this dtype from a kitti file
+        """
+        pass
+
     def __repr__(self):
         return "TransformTorch from {} to {} with H:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.child_frame_id, self.transform.cpu().numpy().round(4), self.stamp, self.device)
     

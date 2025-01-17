@@ -158,6 +158,16 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         warnings.warn('havent implemented featpc->ros message yet')
         pass
 
+    def to_kitti(self, base_dir, idx):
+        """define how to convert this dtype to a kitti file
+        """
+        pass
+
+    def from_kitti(self, base_dir, idx, device):
+        """define how to convert this dtype from a kitti file
+        """
+        pass
+
     def to(self, device):
         self.device=device
         self.pts = self.pts.to(device)
