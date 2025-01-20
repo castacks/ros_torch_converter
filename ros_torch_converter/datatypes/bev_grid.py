@@ -89,7 +89,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         return res
 
-    def to_rosmsg(self, viz_features=True):
+    def to_rosmsg(self, viz_features=True, viz_layers=['dino_0', 'dino_1', 'dino_2']):
         gridmap_msg = GridMap()
 
         gridmap_data = self.bev_grid.data.cpu().numpy()
@@ -199,8 +199,9 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
-        if gridmap_data.shape[-1] > 2:
-            gridmap_rgb = gridmap_data[..., :3]
+        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys):
+            viz_idxs = [self.bev_grid.feature_keys.index(k) for k in viz_layers]
+            gridmap_rgb = gridmap_data[..., viz_idxs]
             vmin = gridmap_rgb.reshape(-1, 3).min(axis=0).reshape(1, 1, 3)
             vmax = gridmap_rgb.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
 

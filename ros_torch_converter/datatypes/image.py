@@ -56,7 +56,7 @@ class ImageTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = ImageTorch(device)
-        img = res.bridge.imgmsg_to_cv2(msg)
+        img = res.bridge.imgmsg_to_cv2(msg)[..., :3]
         img = torch.from_numpy(img/255.).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
