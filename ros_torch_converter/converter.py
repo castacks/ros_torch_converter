@@ -2,6 +2,7 @@ import copy
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
@@ -66,7 +67,7 @@ class ROSTorchConverter(Node):
                 lambda msg, topic_conf=topic_conf: self.handle_msg(
                     msg, topic_conf
                 ),  # Callback with additional args
-                10,  # QoS (default queue size)
+                qos_profile=qos_profile_sensor_data,  # QoS (default queue size)
             )
 
     def handle_msg(self, msg, topic_conf):
