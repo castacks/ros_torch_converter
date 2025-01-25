@@ -141,6 +141,7 @@ if __name__ == '__main__':
         queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
     print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+    n_frames = all_valid_mask.shape[0]
 
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
@@ -175,7 +176,8 @@ if __name__ == '__main__':
             idxs = np.argwhere(target_diffs < 1e-8).flatten()
 
             if len(idxs) > 0:
-                # print('topic {} msg for frames {}'.format(topic, idxs))
+#                print('topic {} msg for frames {}'.format(topic, idxs))
+                print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
                 checks[topic].append(idxs)
 
                 torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
