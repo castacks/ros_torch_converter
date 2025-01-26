@@ -79,6 +79,74 @@ class ImageTorch(TorchCoordinatorDataType):
     def __repr__(self):
         return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
 
+class ThermalImageTorch(TorchCoordinatorDataType):
+    """
+    TorchCoordinator class for images
+    (note that this class is specifically an image type that can be cv_bridged),
+    For arbitrary images, use FeatureImageTorch (which will serialize to a custom message instead)
+    """
+    to_rosmsg_type = Image
+    from_rosmsg_type = Image
+
+    def __init__(self, device):
+        super().__init__()
+        self.image = torch.zeros(0,0,3, device=device)
+        self.bridge = cv_bridge.CvBridge()
+        self.device = device
+
+    def from_torch(image):
+        if image.max() > 1.:
+            warnings.warn("Found image with value > 1. Did you convert from uint8 to float?")
+
+        res = ThermalImageTorch(device=image.device)
+        res.image = image.float()
+        return res
+
+    def from_numpy(image, device):
+        if image.max() > 1.:
+            warnings.warn("Found image with value > 1. Did you convert from uint8 to float?")
+
+        res = ThermalImageTorch(device=device)
+        res.image = torch.tensor(image, dtype=torch.float32, device=device)
+        return res
+
+    def to_rosmsg(self, encoding='passthrough', compressed=False):
+        img = (self.image*255.).cpu().numpy().astype(np.uint8)
+        if compressed:
+            img_msg = self.bridge.cv2_to_compressed_imgmsg(img, encoding=encoding)
+        else:
+            img_msg = self.bridge.cv2_to_imgmsg(img, encoding=encoding)
+
+        img_msg.header.stamp = time_to_stamp(self.stamp)
+        img_msg.header.frame_id = self.frame_id
+        return img_msg
+    
+    def from_rosmsg(msg, device='cpu'):
+        res = ThermalImageTorch(device)
+        img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        # img = torch.from_numpy(img/255.).float().to(device)
+        res.image = img
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    def to_kitti(self, base_dir, idx):
+        save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        # img = (self.image * 255.).long().cpu().numpy() pdb
+        # import pdb;pdb.set_trace()
+        cv2.imwrite(save_fp, self.image)
+
+    def from_kitti(self, base_dir, idx, device='cpu'):
+        pass
+
+    def to(self, device):
+        self.device = device
+        self.image = self.image.to(device)
+        return self
+    
+    def __repr__(self):
+        return "ThermalImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
+    
 class FeatureImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for feature images
