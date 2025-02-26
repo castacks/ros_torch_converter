@@ -102,11 +102,18 @@ class ROSTorchConverter(Node):
 
             data_exists = self.data[topic_conf["name"]] is not None
             data_age = curr_time - self.data_times[topic_conf["name"]]
-            out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
-                topic_conf["name"] + " " + topic_conf["topic"] + ":",
-                data_exists,
-                data_age,
-            )
+            if data_exists:
+                out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
+                    topic_conf["name"] + " " + topic_conf["topic"] + ":",
+                    data_exists,
+                    data_age,
+                )
+            else: # if data does not exist, print in red
+                out += "\033[91m\t{:<16} exists: {} age:{:.2f}s\033[0m\n".format(
+                    topic_conf["name"] + " " + topic_conf["topic"] + ":",
+                    data_exists,
+                    data_age,
+                )
 
         out += "can get data: {}\n".format(self.can_get_data())
         out += "curr time: {}\n".format(curr_time)
