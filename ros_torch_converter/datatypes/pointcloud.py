@@ -128,6 +128,9 @@ class PointCloudTorch(TorchCoordinatorDataType):
 class FeaturePointCloudTorch(TorchCoordinatorDataType):
     """
     PointCloud with an abritrary set of point features
+
+    Major difference is that not all points need have a feature,
+        so maintain an additional mask, such that pts[mask] = features
     """
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
@@ -135,23 +138,40 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     def __init__(self, device):
         self.pts = torch.zeros(0, 3, device=device)
         self.features = torch.zeros(0, 0, device=device)
+        self.feat_mask = torch.zeros(0, device=device, dtype=torch.bool)
         self.device = device
+
+    @property
+    def feature_pts(self):
+        return self.pts[self.feat_mask]
+
+    @property
+    def non_feature_pts(self):
+        return self.pts[~self.feat_mask]
 
     def from_rosmsg(msg, device):
         warnings.warn('havent implemented ros->featpc yet')
         res = FeaturePointCloudTorch(device=device)
         return res
 
-    def from_torch(pts, features):
+    def from_torch(pts, features, mask):
+        assert len(mask) == len(pts), "expected len(mask) == len(pts)"
+        assert mask.sum() == len(features), "expected mask.sum() == len(features)"
+
         res = FeaturePointCloudTorch(device=pts.device)
         res.pts = pts.float()
         res.features = features.float()
+        res.feat_mask = mask.bool()
         return res
     
-    def from_numpy(pts, features, device):
+    def from_numpy(pts, features, mask, device):
+        assert len(mask) == len(pts), "expected len(mask) == len(pts)"
+        assert mask.sum() == len(features), "expected mask.sum() == len(features)"
+
         res = FeaturePointCloudTorch(device=device)
         res.pts = torch.from_numpy(pts, dtype=torch.float32, device=device)
         res.features = torch.from_numpy(features, dtype=torch.float32, device=device)
+        res.feat_mask = torch.from_numpy(mask, dtype=torch.bool, device=device)
         return res
     
     def to_rosmsg(self):
