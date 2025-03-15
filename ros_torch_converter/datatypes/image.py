@@ -108,13 +108,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
 
         res = ThermalImageTorch(device=device)
         res.image = torch.tensor(image, dtype=torch.float32, device=device)
-        return res
-    
-    def from_16bit(image, device='cpu'):
-        # preserve numpy dtype (for 16-bit raw)
-        res = ThermalImageTorch(device=device)
-        res.image = image
-        return res
+        return res   
 
     def to_rosmsg(self, encoding='passthrough', compressed=False):
         img = (self.image*255.).cpu().numpy().astype(np.uint8)
@@ -128,9 +122,12 @@ class ThermalImageTorch(TorchCoordinatorDataType):
         return img_msg
     
     def from_rosmsg(msg, device='cpu'):
+        '''
+        Read 8-bit processed image from ROS message
+        '''
         res = ThermalImageTorch(device)
         img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-        # img = torch.from_numpy(img/255.).float().to(device)
+        img = torch.from_numpy(img/255.).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id

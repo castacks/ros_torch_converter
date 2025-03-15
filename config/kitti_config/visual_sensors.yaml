@@ -37,3 +37,13 @@
       topic: /thermal_right/image
       type: ThermalImage
       args: {}
+    
+    # - name: thermal_left_processed
+    #   topic: /thermal_left/image_processed
+    #   type: Image
+    #   args: {}
+    
+    # - name: thermal_right_processed
+    #   topic: /thermal_right/image_processed
+    #   type: Image
+    #   args: {}
