@@ -45,9 +45,9 @@ class PointCloudTorch(TorchCoordinatorDataType):
 
     def from_numpy(pts, colors=None, device='cpu'):
         res = PointCloudTorch(device=device)
-        res.pts = torch.from_numpy(pts, dtype=torch.float32, device=device)
+        res.pts = torch.tensor(pts, dtype=torch.float32, device=device)
         if colors is not None:
-            res.colors = torch.from_numpy(colors, dtype=torch.float32, device=device)
+            res.colors = torch.tensor(colors, dtype=torch.float32, device=device)
 
         return res
 
