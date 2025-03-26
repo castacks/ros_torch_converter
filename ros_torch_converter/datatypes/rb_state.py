@@ -44,6 +44,9 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         res.child_frame_id = msg.child_frame_id
         return res
 
+    def from_numpy(data, child_frame_id, device='cpu'):
+        return OdomRBStateTorch.from_torch(torch.tensor(data, dtype=torch.float, device=device), child_frame_id)
+
     def from_torch(data, child_frame_id):
         res = OdomRBStateTorch(device=data.device)
         res.state = data
