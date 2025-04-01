@@ -30,12 +30,12 @@
 
     - name: thermal_left
       topic: /thermal_left/image
-      type: ThermalImage
+      type: Thermal16bitImage
       args: {}
     
     - name: thermal_right
       topic: /thermal_right/image
-      type: ThermalImage
+      type: Thermal16bitImage
       args: {}
     
     # - name: thermal_left_processed

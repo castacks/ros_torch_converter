@@ -5,7 +5,7 @@ from rclpy.node import Node
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
-from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch
+from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch, Thermal16bitImageTorch
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
 from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
@@ -20,6 +20,7 @@ str_to_cvt_class = {
     "Image": ImageTorch,
     "FeatureImage": FeatureImageTorch,
     "ThermalImage": ThermalImageTorch,
+    "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
     "PointCloud": PointCloudTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
