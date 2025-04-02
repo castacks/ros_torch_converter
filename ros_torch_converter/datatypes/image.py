@@ -127,6 +127,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
         '''
         res = ThermalImageTorch(device)
         img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        img = np.stack([img] * 3, axis=-1)
         img = torch.from_numpy(img/255.).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
