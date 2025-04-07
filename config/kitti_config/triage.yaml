@@ -1,0 +1,19 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  data:
+    - name: odom
+      topic: /spot1/base/autonomy/slam/aft_mapped_to_init
+      type: OdomRBState
+      args: {}
+
+    - name: super_odometry_pc
+      topic: /spot1/base/autonomy/slam/registered_scan
+      type: PointCloud
+      args: {}

@@ -264,8 +264,32 @@ class BEVGridTorch(TorchCoordinatorDataType):
         data = self.bev_grid.data.cpu().numpy()
         np.save(data_fp, data)
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+        metadata = yaml.safe_load(open(metadata_fp))
+        fks = metadata['feature_keys']
+
+        metadata = LocalMapperMetadata(
+            origin = metadata['origin'],
+            length = metadata['length'],
+            resolution = metadata['resolution'],
+            device = device
+        )
+        
+        bev_grid = BEVGrid(
+            metadata = metadata,
+            n_features = len(fks),
+            feature_keys = fks,
+        )
+        
+        data = np.load(data_fp)
+        bev_grid.data = torch.tensor(data, dtype=torch.float, device=device)
+        
+        gt = BEVGridTorch.from_bev_grid(bev_grid)
+        
+        return bev_grid
 
     def to(self, device):
         self.device = device
