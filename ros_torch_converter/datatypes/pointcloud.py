@@ -20,6 +20,14 @@ class PointCloudTorch(TorchCoordinatorDataType):
         self.pts = torch.zeros(0, 3, device=device)
         self.colors = torch.zeros(0, 3, device=device)
         self.device = device
+
+    def clone(self):
+        out = PointCloudTorch(device=self.device)
+        out.pts = self.pts.clone()
+        out.colors = self.colors.clone()
+        out.stamp = self.stamp
+        out.frame_id = self.frame_id
+        return out
     
     def from_rosmsg(msg, device='cpu'):
         #HACK to get ros2_numpy to cooperate with rosbags dtypes.
@@ -136,10 +144,20 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     from_rosmsg_type = PointCloud2
 
     def __init__(self, device):
+        super().__init__()
         self.pts = torch.zeros(0, 3, device=device)
         self.features = torch.zeros(0, 0, device=device)
         self.feat_mask = torch.zeros(0, device=device, dtype=torch.bool)
         self.device = device
+
+    def clone(self):
+        out = FeaturePointCloudTorch(device=self.device)
+        out.pts = self.pts.clone()
+        out.features = self.features.clone()
+        out.feat_mask = self.feat_mask.clone()
+        out.stamp = self.stamp
+        out.frame_id = self.frame_id
+        return out
 
     @property
     def feature_pts(self):
