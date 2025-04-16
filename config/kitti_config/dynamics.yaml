@@ -1,0 +1,44 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  data:
+    - name: odom
+      topic: /superodometry/integrated_to_init #namespaced in new bags
+      type: OdomRBState
+      args: {}
+
+    - name: gps_odom
+      topic: /odometry/filtered_odom
+      type: OdomRBState
+      args: {}
+
+    - name: local_navmap
+      topic: /local_navmap
+      type: BEVGrid
+      args: {}
+
+    - name: steer_angle
+      topic: /talon/current_position
+      type: Float32
+      args: {}
+
+    - name: command
+      topic: /mux/cmd
+      type: Command
+      args: {}
+
+    - name: teleop_command
+      topic: /teleop_cmd
+      type: Command
+      args: {}
+
+    - name: auto_command
+      topic: /auto_cmd
+      type: Command
+      args: {}
