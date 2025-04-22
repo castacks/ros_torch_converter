@@ -104,8 +104,18 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
 
         np.savetxt(save_fp, data)
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        fp = os.path.join(base_dir, "data.txt")
+        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
+
+        state = np.loadtxt(fp)[idx]
+        ts = np.loadtxt(timestamp_fp)[idx]
+
+        odom = OdomRBStateTorch(device=device)
+        odom.state = torch.tensor(state, device=device).float()
+        odom.stamp = ts
+
+        return odom
 
     def __repr__(self):
         return "OdomRBStateTorch from {} to {} with x:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.child_frame_id, self.state.cpu().numpy().round(4), self.stamp, self.device)

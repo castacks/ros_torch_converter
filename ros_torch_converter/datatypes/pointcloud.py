@@ -121,8 +121,17 @@ class PointCloudTorch(TorchCoordinatorDataType):
         pts = self.pts.cpu().numpy()
         np.save(save_fp, pts)
 
-    def from_kitti(self, base_dir, idx, device):
-        pass
+    def from_kitti(base_dir, idx, device):
+        fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
+        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
+        ts = np.loadtxt(timestamp_fp)[idx]
+
+        pts = np.load(fp)
+        pc = PointCloudTorch(device=device)
+        pc.pts = torch.tensor(pts, device=device).float()
+        pc.stamp = ts
+
+        return pc
 
     def to(self, device):
         self.device = device

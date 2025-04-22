@@ -13,6 +13,11 @@
       type: OdomRBState
       args: {}
 
+    - name: super_odometry_pc
+      topic: /superodometry/velodyne_cloud_registered
+      type: PointCloud
+      args: {}
+
     - name: gps_odom
       topic: /odometry/filtered_odom
       type: OdomRBState
@@ -23,25 +28,20 @@
       type: Image
       args: {}
 
-    - name: pcl
-      topic: /velodyne_1/velodyne_points
-      type: PointCloud
-      args: {}
-
-    - name: thermal_left
-      topic: /thermal_left/image
-      type: Thermal16bitImage
-      args: {}
+    # - name: thermal_left
+    #   topic: /thermal_left/image
+    #   type: Thermal16bitImage
+    #   args: {}
     
-    - name: thermal_right
-      topic: /thermal_right/image
-      type: Thermal16bitImage
-      args: {}
+    # - name: thermal_right
+    #   topic: /thermal_right/image
+    #   type: Thermal16bitImage
+    #   args: {}
     
-    - name: thermal_left_processed
-      topic: /thermal_left/image_processed
-      type: ThermalImage
-      args: {}
+    # - name: thermal_left_processed
+    #   topic: /thermal_left/image_processed
+    #   type: ThermalImage
+    #   args: {}
     
     - name: thermal_right_processed
       topic: /thermal_right/image_processed

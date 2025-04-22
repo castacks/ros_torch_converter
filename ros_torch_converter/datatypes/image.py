@@ -68,8 +68,15 @@ class ImageTorch(TorchCoordinatorDataType):
         img = (self.image * 255.).long().cpu().numpy()
         cv2.imwrite(save_fp, img)
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
+        ts = np.loadtxt(timestamp_fp)[idx]
+
+        img = ImageTorch(device=device)
+        img.image = torch.tensor(cv2.cvtColor(cv2.imread(fp), cv2.COLOR_BGR2RGB), device=device).float() / 255.
+        img.stamp = ts
+        return img
 
     def to(self, device):
         self.device = device
