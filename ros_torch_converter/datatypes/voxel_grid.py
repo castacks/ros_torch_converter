@@ -1,5 +1,4 @@
-import copy
-import warnings
+import array
 import torch
 import numpy as np
 import ros2_numpy
@@ -10,7 +9,7 @@ from physics_atv_visual_mapping.localmapping.voxel.voxel_localmapper import Voxe
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
 from physics_atv_visual_mapping.utils import normalize_dino
 
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, PointField
 
 from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
 
@@ -44,41 +43,49 @@ class VoxelGridTorch(TorchCoordinatorDataType):
 
         all_idxs = torch.cat([feature_idxs, non_feature_idxs])
         all_pts = self.voxel_grid.grid_indices_to_pts(self.voxel_grid.raster_indices_to_grid_indices(all_idxs))
+        points = all_pts.cpu().numpy().astype(np.float32)
 
-        feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
-        non_feature_colors = 0.8 * torch.ones(non_feature_idxs.shape[0], 3, device=self.device)
+        msg = PointCloud2()
+        msg.height = 1
+        msg.width = points.shape[0]
+        msg.point_step = 12
 
-        feature_hits = self.voxel_grid.hits / (self.voxel_grid.hits + self.voxel_grid.misses)
-        non_feature_hits = torch.ones(non_feature_idxs.shape[0], device=self.device)
+        msg.fields = [PointField(name=n, offset=4*i, datatype=PointField.FLOAT32, count=msg.width) for i,n in enumerate('xyz')]
 
-        # feature_colors *= feature_hits.view(-1, 1)
+        data = points
 
-        all_colors = torch.cat([feature_colors, non_feature_colors], dim=0)
+        if self.voxel_grid.features.shape[1] >= 3:
+            feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
+            non_feature_colors = 0.8 * torch.ones(non_feature_idxs.shape[0], 3, device=self.device)
+            all_colors = torch.cat([feature_colors, non_feature_colors], dim=0)
+            colors = all_colors.cpu().numpy()
 
-        points = all_pts.cpu().numpy()
-        rgb_values = (all_colors * 255.0).cpu().numpy().astype(np.uint32)
-        # Prepare the data array with XYZ and RGB
-        xyzcolor = np.zeros(
-            points.shape[0],
-            dtype=[
-                ("x", np.float32),
-                ("y", np.float32),
-                ("z", np.float32),
-                ("rgb", np.float32),
-            ],
-        )
+            msg.point_step += 4
+            msg.fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=msg.width))
 
-        # Assign XYZ values
-        xyzcolor["x"] = points[:, 0]
-        xyzcolor["y"] = points[:, 1]
-        xyzcolor["z"] = points[:, 2]
+            r = (colors[:, 0] * 255).astype(np.uint32)
+            g = (colors[:, 1] * 255).astype(np.uint32)
+            b = (colors[:, 2] * 255).astype(np.uint32)
+            rgb = (r<<16) | (g<<8) | (b<<0)
+            rgb.dtype = np.float32
 
-        rgb_arr = np.array((rgb_values[:, 0] << 16) | (rgb_values[:, 1] << 8) | (rgb_values[:, 2] << 0), dtype=np.uint32)
-        rgb_arr.dtype = np.float32
-        xyzcolor["rgb"] = rgb_arr
+            data = np.concatenate([data, rgb.reshape(-1, 1)], axis=-1)
 
-        msg = ros2_numpy.msgify(PointCloud2, xyzcolor)
+        data = data.flatten()
 
+        # borrowing from https://github.com/Box-Robotics/ros2_numpy/blob/humble/ros2_numpy/point_cloud2.py
+        mem_view = memoryview(data)
+
+        if mem_view.nbytes > 0:
+            array_bytes = mem_view.cast("B")
+        else:
+            array_bytes = b""
+
+        as_array = array.array("B")
+        as_array.frombytes(array_bytes)
+
+        msg.data = as_array
+            
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
         return msg

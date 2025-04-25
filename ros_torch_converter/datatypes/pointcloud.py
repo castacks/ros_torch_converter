@@ -1,5 +1,6 @@
 import os
 import torch
+import array
 import rosbags
 import warnings
 import ros2_numpy
@@ -7,7 +8,7 @@ import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
-from sensor_msgs.msg import PointCloud2
+from sensor_msgs.msg import PointCloud2, PointField
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
@@ -31,11 +32,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
 
         res = PointCloudTorch(device=device)
         pcl_np = ros2_numpy.numpify(msg)
-        xyz = np.stack(
-            [pcl_np["x"].flatten(), pcl_np["y"].flatten(), pcl_np["z"].flatten()], axis=-1
-        )
-
-        #TODO rgb
+        xyz = pcl_np['xyz']
 
         res.pts = torch.from_numpy(xyz).float().to(res.device)
 
@@ -59,51 +56,45 @@ class PointCloudTorch(TorchCoordinatorDataType):
         return res
 
     def to_rosmsg(self):
-        points = self.pts.cpu().numpy()
+        points = self.pts.cpu().numpy().astype(np.float32)
+        colors = self.colors.cpu().numpy()
+
+        msg = PointCloud2()
+        msg.height = 1
+        msg.width = points.shape[0]
+        msg.point_step = 12
+
+        msg.fields = [PointField(name=n, offset=4*i, datatype=PointField.FLOAT32, count=msg.width) for i,n in enumerate('xyz')]
+
+        data = points
+
         if self.colors.shape[0] > 0:
-            rgb_values = (self.colors * 255.0).cpu().numpy().astype(np.uint8)
-            # Prepare the data array with XYZ and RGB
-            xyzcolor = np.zeros(
-                points.shape[0],
-                dtype=[
-                    ("x", np.float32),
-                    ("y", np.float32),
-                    ("z", np.float32),
-                    ("rgb", np.float32),
-                ],
-            )
+            msg.point_step += 4
+            msg.fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=msg.width))
 
-            # Assign XYZ values
-            xyzcolor["x"] = points[:, 0]
-            xyzcolor["y"] = points[:, 1]
-            xyzcolor["z"] = points[:, 2]
+            r = (colors[:, 0] * 255).astype(np.uint32)
+            g = (colors[:, 1] * 255).astype(np.uint32)
+            b = (colors[:, 2] * 255).astype(np.uint32)
+            rgb = (r<<16) | (g<<8) | (b<<0)
+            rgb.dtype = np.float32
 
-            color = np.zeros(
-                points.shape[0], dtype=[("r", np.uint8), ("g", np.uint8), ("b", np.uint8)]
-            )
-            color["r"] = rgb_values[:, 0]
-            color["g"] = rgb_values[:, 1]
-            color["b"] = rgb_values[:, 2]
-            xyzcolor["rgb"] = ros2_numpy.point_cloud2.merge_rgb_fields(color)
+            data = np.concatenate([data, rgb.reshape(-1, 1)], axis=-1)
 
-            msg = ros2_numpy.msgify(PointCloud2, xyzcolor)
+        data = data.flatten()
+
+        # borrowing from https://github.com/Box-Robotics/ros2_numpy/blob/humble/ros2_numpy/point_cloud2.py
+        mem_view = memoryview(data)
+
+        if mem_view.nbytes > 0:
+            array_bytes = mem_view.cast("B")
         else:
-            xyzcolor = np.zeros(
-                points.shape[0],
-                dtype=[
-                    ("x", np.float32),
-                    ("y", np.float32),
-                    ("z", np.float32),
-                ],
-            )
+            array_bytes = b""
 
-            # Assign XYZ values
-            xyzcolor["x"] = points[:, 0]
-            xyzcolor["y"] = points[:, 1]
-            xyzcolor["z"] = points[:, 2]
+        as_array = array.array("B")
+        as_array.frombytes(array_bytes)
 
-            msg = ros2_numpy.msgify(PointCloud2, xyzcolor)
-
+        msg.data = as_array
+            
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
         return msg
