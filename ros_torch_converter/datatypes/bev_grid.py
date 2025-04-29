@@ -98,14 +98,18 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.header.stamp = time_to_stamp(self.stamp)
         gridmap_msg.header.frame_id = self.frame_id
 
-        # if self.layer_keys is None:
-        #     gridmap_msg.layers = [
-        #         "{}_{}".format(self.layer_key, i) for i in range(gridmap_data.shape[-1])
-        #     ]
-        # else:
-        #     gridmap_msg.layers = copy.deepcopy(self.layer_keys)
-
         gridmap_msg.layers = copy.deepcopy(self.bev_grid.feature_keys)
+
+        has_unk = 'min_elevation_filtered_inflated_mask' in self.bev_grid.feature_keys
+
+        if has_unk:
+            unk_idx = self.bev_grid.feature_keys.index('min_elevation_filtered_inflated_mask')
+            unk = np.copy(gridmap_data[..., unk_idx])
+            unk[unk < 0.1] = float('nan')
+            gridmap_data = np.concatenate([gridmap_data, np.expand_dims(unk,-1)], axis=-1)
+
+            gridmap_msg.layers.append('viz_mask')
+            gridmap_msg.basic_layers.append('viz_mask')
 
         gridmap_msg.info.resolution = self.bev_grid.metadata.resolution.mean().item()
         gridmap_msg.info.length_x = self.bev_grid.metadata.length[0].item()
