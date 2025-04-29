@@ -53,8 +53,18 @@ class Float32Torch(TorchCoordinatorDataType):
 
         np.savetxt(save_fp, data)
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        fp = os.path.join(base_dir, "data.txt")
+        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
+
+        data = np.loadtxt(fp)[idx]
+        ts = np.loadtxt(timestamp_fp)[idx]
+
+        out = Float32Torch(device=device)
+        out.data = torch.tensor(data, device=device).float()
+        out.stamp = ts
+
+        return out
 
     def __repr__(self):
         return "Float32Torch with data {:.2f}, device {}".format(self.data.item(), self.device)
