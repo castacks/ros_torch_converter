@@ -90,12 +90,16 @@ class ROSTorchConverter(Node):
 
     def can_get_data(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
-        return all(
-            [
-                curr_time - data_time < self.config["max_age"]
-                for data_time in self.data_times.values()
-            ]
-        )
+
+        for topic_config in self.config["topics"]:
+            max_age = topic_config["max_age"]
+            topic_name = topic_config["name"]
+            data_time = self.data_times[topic_name]
+
+            if curr_time - data_time > max_age:
+                return False
+
+        return True
 
     def get_status_str(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
