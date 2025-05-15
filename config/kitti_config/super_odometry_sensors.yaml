@@ -18,15 +18,15 @@
       type: OdomRBState
       args: {}
 
-    - name: image_left_color_multisense
+    - name: image_left_color
       topic: /multisense/left/image_rect_color
       type: Image
       args: {}
 
-    - name: image_left_color
-      topic: /thermal_right/image_processed
-      type: ThermalImage
-      args: {}
+#    - name: image_left_color_thermal
+#      topic: /thermal_right/image_processed
+#      type: ThermalImage
+#      args: {}
 
     - name: super_odometry_pc
       topic: /superodometry/velodyne_cloud_registered
