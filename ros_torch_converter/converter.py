@@ -96,7 +96,7 @@ class ROSTorchConverter(Node):
             topic_name = topic_config["name"]
             data_time = self.data_times[topic_name]
 
-            if curr_time - data_time > max_age:
+            if curr_time - data_time > max_age or data_time < 0.:
                 return False
 
         return True
