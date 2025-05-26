@@ -82,7 +82,16 @@ class ROSTorchConverter(Node):
 
     def get_data(self, return_times=False, device="cpu"):
         self.lock = True
-        data = {k: self.converters[k].from_rosmsg(msg, device=self.device) for k, msg in self.data.items()}
+        data = {}
+
+        for topic_conf in self.config["topics"]:
+            tname = topic_conf["name"]
+            cvt = self.converters[tname]
+            msg = self.data[tname]
+            msg_torch = cvt.from_rosmsg(msg, device=self.device, **topic_conf["args"])
+            data[tname] = msg_torch
+
+        # data = {k: self.converters[k].from_rosmsg(msg, device=self.device, **self.config["topics"][k]["args"]) for k, msg in self.data.items()}
         times = copy.deepcopy(self.data_times)
         self.lock = False
 

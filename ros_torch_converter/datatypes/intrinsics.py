@@ -23,9 +23,9 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
     def from_rosmsg(msg, use_p=True, device='cpu'):
         res = IntrinsicsTorch(device=device)
         if use_p:
-            res.intrinsics = torch.tensor(msg.p).reshape(3, 4)[:3, :3]
+            res.intrinsics = torch.tensor(msg.p, device=device).reshape(3, 4)[:3, :3]
         else:
-            res.intrinsics = torch.tensor(msg.k).reshape(3, 3)
+            res.intrinsics = torch.tensor(msg.k, device=device).reshape(3, 3)
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
