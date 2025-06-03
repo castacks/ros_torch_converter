@@ -12,6 +12,7 @@ from rosbags.typesys import Stores, get_typestore
 from tartandriver_utils.ros_utils import stamp_to_time
 
 from ros_torch_converter.converter import str_to_cvt_class
+from ros_torch_converter.tf_manager import TfManager
 
 """
 Script to create kitti-formatted datasets from ros2 bags
@@ -35,7 +36,7 @@ def setup_queue(reader, config):
         'topic_error': {},
     }
 
-    for topic_data in config['data']:
+    for topic_data in config['topics']:
         queue['topic_times'][topic_data['topic']] = -np.ones(len(target_times))
         queue['topic_error'][topic_data['topic']] = float('inf') * np.ones(len(target_times))
 
@@ -71,9 +72,9 @@ if __name__ == '__main__':
     os.makedirs(args.dst_dir, exist_ok=True)
 
     config = yaml.safe_load(open(args.config, 'r'))
-    target_topics = [x['topic'] for x in config['data']]
-    topic_to_msgtype = {x['topic']:x['type'] for x in config['data']}
-    topic_to_name = {x['topic']:x['name'] for x in config['data']}
+    target_topics = [x['topic'] for x in config['topics']]
+    topic_to_msgtype = {x['topic']:x['type'] for x in config['topics']}
+    topic_to_name = {x['topic']:x['name'] for x in config['topics']}
 
     bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
 
@@ -84,6 +85,10 @@ if __name__ == '__main__':
     bagpath = Path(args.src_dir)
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
+
+    print('handling tf...')
+    tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+    frame_list = set()
 
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
@@ -98,8 +103,12 @@ if __name__ == '__main__':
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
+                frame_list.add(msg.header.frame_id)
             else:
                 msg_time = timestamp * 1e-9
+
+            if hasattr(msg, "child_frame_id"):
+                frame_list.add(msg.child_frame_id)
 
             tdiffs = queue['target_times'] - msg_time
 
@@ -111,16 +120,27 @@ if __name__ == '__main__':
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
 
-    
+    frame_list = list(frame_list)
+    tf_tmin, tf_tmax = tf_manager.get_valid_times_from_list(frame_list)
+
     # debug code
     if args.dryrun:
         import matplotlib.pyplot as plt
         plt.plot(queue['target_times'], marker='.', label='target_times')
 
+        x = np.arange(len(queue['target_times']))
+
+        if tf_tmin > 0.:
+            idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
+            plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
+
+        if tf_tmax < 1e16:
+            idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
+            plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
+
         for topic in target_topics:
             times = queue['topic_times'][topic]
             error = queue['topic_error'][topic]
-            x = np.arange(len(times))
             mask = error < config['interp_tol']
             plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
 
@@ -131,8 +151,12 @@ if __name__ == '__main__':
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
+
     for topic, err in queue['topic_error'].items():
         all_valid_mask = all_valid_mask & (err < config['interp_tol'])
+
+    for topic, times in queue['topic_times'].items():
+        all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
 
     queue['target_times'] = queue['target_times'][all_valid_mask]
 
@@ -146,7 +170,7 @@ if __name__ == '__main__':
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
-    for topic_config in config['data']:
+    for topic_config in config['topics']:
         topic = topic_config['topic']
         topic_dir = os.path.join(args.dst_dir, topic_config['name'])
         os.makedirs(topic_dir, exist_ok=True)
@@ -186,6 +210,9 @@ if __name__ == '__main__':
                 base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:
                     torch_data.to_kitti(base_dir, idx)
+
+    #save tf
+    tf_manager.to_kitti(args.dst_dir)
 
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}

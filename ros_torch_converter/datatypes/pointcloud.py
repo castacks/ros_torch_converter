@@ -42,7 +42,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
         pcl_np = ros2_numpy.numpify(msg)
         xyz = pcl_np['xyz']
 
-        res.pts = torch.from_numpy(xyz).float().to(res.device)
+        res.pts = torch.tensor(xyz).float().to(res.device)
 
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
