@@ -57,8 +57,15 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         np.savetxt(save_fp, self.intrinsics.cpu().numpy().flatten())
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        res = IntrinsicsTorch(device=device)
+
+        fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
+        data = np.loadtxt(fp).reshape(3, 3)
+
+        res.intrinsics = torch.tensor(data).float().to(device)
+
+        return res
 
     def to(self, device):
         self.device = device

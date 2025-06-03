@@ -212,7 +212,7 @@ if __name__ == '__main__':
                     torch_data.to_kitti(base_dir, idx)
 
     #save tf
-    tf_manager.to_kitti(base_dir)
+    tf_manager.to_kitti(args.dst_dir)
 
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
