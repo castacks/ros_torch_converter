@@ -58,6 +58,7 @@ def check_connections(connections, target_topics):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='path to config')
+    parser.add_argument('--calib_file', type=str, required=False, help='overwrite some tfs with calibs from this file')
     parser.add_argument('--src_dir', type=str, required=True, help='path to input dir')
     parser.add_argument('--dst_dir', type=str, required=True, help='path to output dir')
     parser.add_argument('--dryrun', action='store_true', help='set this flag to check data w/o parsing it')
@@ -90,6 +91,32 @@ if __name__ == '__main__':
     tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
     frame_list = set()
 
+    #update the tf tree
+    if args.calib_file:
+        print('applying calib file...')
+        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
+
+        for calib_tf in calib_config['transform_params']:
+            src_frame = calib_tf['from_frame']
+            dst_frame = calib_tf['to_frame']
+
+            if dst_frame in tf_manager.tf_tree.nodes.keys():
+                tf_node = tf_manager.tf_tree.nodes[dst_frame]
+
+                if tf_node.parent_frame_id != src_frame:
+                    print('got tf {}->{} in calib, but is {}->{} in data. Skipping...'.format(src_frame, dst_frame, tf_node.parent_frame_id, dst_frame))
+                    continue
+
+                if not tf_node.is_static:
+                    print('tf {}->{} is not static. Skipping...'.format(src_frame, dst_frame))
+                    continue
+
+                tf_node.transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
+
+            else:
+                print('couldnt find tf {}->{} in tf tree!'.format(src_frame, dst_frame))
+                
+    print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
 

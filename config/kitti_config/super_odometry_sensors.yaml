@@ -7,30 +7,29 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
-  data:
-    - name: odom
+  topics:
+    - name: odometry
       topic: /superodometry/integrated_to_init #namespaced in new bags
       type: OdomRBState
+      max_age: 1.
       args: {}
 
-    - name: gps_odom
-      topic: /odometry/filtered_odom
-      type: OdomRBState
+    - name: image_intrinsics
+      topic: /multisense/left/image_rect_color/camera_info
+      type: Intrinsics
+      max_age: 1.
       args: {}
 
-    - name: image_left_color
+    - name: image
       topic: /multisense/left/image_rect_color
       type: Image
+      max_age: 1.
       args: {}
 
-#    - name: image_left_color_thermal
-#      topic: /thermal_right/image_processed
-#      type: ThermalImage
-#      args: {}
-
-    - name: super_odometry_pc
-      topic: /superodometry/velodyne_cloud_registered
+    - name: pointcloud_in_odom
+      topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
       type: PointCloud
+      max_age: 1.
       args: {}
 
     - name: steer_angle
