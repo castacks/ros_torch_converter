@@ -87,15 +87,26 @@ if __name__ == '__main__':
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
 
+    has_calib_file = False
+    #update the tf tree
+    if 'calib_file' in config.keys():
+        print('applying calib file from config...')
+        calib_config = yaml.safe_load(open(config['calib_file'], 'r'))
+        has_calib_file = True
+
+    elif args.calib_file is not None:
+        print('applying calib file from cli...')
+        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
+        has_calib_file = True
+
+    if not has_calib_file:
+        print('no calib file provided. Note that for Yamaha data this is probably wrong!')
+
     print('handling tf...')
     tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
     frame_list = set()
 
-    #update the tf tree
-    if args.calib_file:
-        print('applying calib file...')
-        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
-
+    if has_calib_file:
         for calib_tf in calib_config['transform_params']:
             src_frame = calib_tf['from_frame']
             dst_frame = calib_tf['to_frame']

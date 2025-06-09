@@ -7,6 +7,9 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
   topics:
     - name: odometry
       topic: /superodometry/integrated_to_init #namespaced in new bags

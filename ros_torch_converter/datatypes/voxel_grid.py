@@ -1,3 +1,5 @@
+import os
+import yaml
 import copy
 import array
 import torch
@@ -93,12 +95,49 @@ class VoxelGridTorch(TorchCoordinatorDataType):
     def to_kitti(self, base_dir, idx):
         """define how to convert this dtype to a kitti file
         """
-        pass
+        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
-    def from_kitti(self, base_dir, idx, device):
+        metadata = {
+            'origin': self.voxel_grid.metadata.origin.tolist(),
+            'length': self.voxel_grid.metadata.length.tolist(),
+            'resolution': self.voxel_grid.metadata.resolution.tolist(),
+        }
+
+        yaml.dump(metadata, open(metadata_fp, 'w'))
+
+        data = {
+            'raster_indices': self.voxel_grid.raster_indices.cpu().numpy(),
+            'features': self.voxel_grid.features.cpu().numpy(),
+            'feature_mask': self.voxel_grid.feature_mask.cpu().numpy(),
+            'hits': self.voxel_grid.hits.cpu().numpy(),
+            'misses': self.voxel_grid.misses.cpu().numpy(),
+        }
+
+        np.savez(data_fp, **data)
+
+    def from_kitti(base_dir, idx, device='cpu'):
         """define how to convert this dtype from a kitti file
         """
-        pass
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+        metadata = yaml.safe_load(open(metadata_fp, 'r'))
+
+        metadata = LocalMapperMetadata(**metadata, device=device)
+
+        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+        voxel_data = np.load(data_fp)
+
+        voxel_grid = VoxelGrid(metadata, n_features=voxel_data['features'].shape[-1], device=device)
+        voxel_grid.raster_indices = torch.tensor(voxel_data['raster_indices'], dtype=torch.long, device=device)
+        voxel_grid.features = torch.tensor(voxel_data['features'], dtype=torch.float, device=device)
+        voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
+        voxel_grid.hits = torch.tensor(voxel_data['hits'], dtype=torch.long, device=device)
+        voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
+
+        vgt = VoxelGridTorch(device=device)
+        vgt.voxel_grid = voxel_grid
+
+        return vgt
 
     def to(self, device):
         self.device = device
