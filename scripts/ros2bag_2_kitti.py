@@ -127,6 +127,7 @@ if __name__ == '__main__':
             else:
                 print('couldnt find tf {}->{} in tf tree!'.format(src_frame, dst_frame))
                 
+    tf_manager.to_kitti(args.dst_dir)
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
@@ -186,6 +187,9 @@ if __name__ == '__main__':
         plt.legend()
         plt.show()
         exit(0)
+
+    #save tf
+    tf_manager.to_kitti(args.dst_dir)
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
@@ -248,9 +252,6 @@ if __name__ == '__main__':
                 base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:
                     torch_data.to_kitti(base_dir, idx)
-
-    #save tf
-    tf_manager.to_kitti(args.dst_dir)
 
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
