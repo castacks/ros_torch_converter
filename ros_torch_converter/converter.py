@@ -6,6 +6,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
+from ros_torch_converter.datatypes.command import CommandTorch
 from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch, Thermal16bitImageTorch
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
 from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
@@ -18,6 +19,7 @@ from tartandriver_utils.ros_utils import stamp_to_time
 str_to_cvt_class = {
     "BEVGrid": BEVGridTorch,
     "Float32": Float32Torch,
+    "Command": CommandTorch,
     "Image": ImageTorch,
     "FeatureImage": FeatureImageTorch,
     "ThermalImage": ThermalImageTorch,
