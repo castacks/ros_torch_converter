@@ -48,7 +48,7 @@ class TfNode:
 
     def dummy_node(fid, depth=-1):
         I = np.array([[0., 0., 0., 0., 0., 0., 1.]])
-        return TfNode(fid, "", I, None, True, depth)
+        return TfNode(fid, "/ROOT", I, None, True, depth)
 
     def get_transform(self, t):
         """
@@ -66,7 +66,13 @@ class TfTree:
     def __init__(self, nodes):
         self.nodes = {x.frame_id:x for x in nodes}
 
+        self.recompute_depth()
+
+    def recompute_depth(self):
         #compute node depths (just have every node iterate up to its root)
+        for node in self.nodes.values():
+            node.depth = -1
+
         self.roots = set()
 
         for node in self.nodes:
@@ -77,19 +83,38 @@ class TfTree:
                 else:
                     assert i == bnode.depth, "uh oh tree depth is bad"
 
+            # if branch[0].parent_frame_id != "/ROOT":
             self.roots.add(branch[0].parent_frame_id)
 
-        for root in self.roots:
-            self.nodes[root] = TfNode.dummy_node(root)
+        # for root in self.roots:
+        #     self.nodes[root] = TfNode.dummy_node(root)
+
+    def add_static_tf(self, frame_id, parent_frame_id, transform):
+        if frame_id in self.nodes.keys():
+            curr_parent_frame_id = self.nodes[frame_id].parent_frame_id
+            if curr_parent_frame_id != parent_frame_id:
+                print('warning: overwriting tf {}->{} to {}->{}'.format(
+                    curr_parent_frame_id, frame_id, parent_frame_id, frame_id
+                ))
+
+        node = TfNode(frame_id=frame_id, parent_frame_id=parent_frame_id, transforms=[transform], times=None, is_static=True)
+
+        self.nodes[frame_id] = node
+        self.recompute_depth()
+
+        return True
             
     def get_branch(self, frame_id):
         if isinstance(frame_id, TfNode):
             frame_id = frame_id.frame_id
 
+        if frame_id in self.roots:
+            return []
+
         curr_node = self.nodes[frame_id]
         branch = [curr_node]
 
-        while curr_node.parent_frame_id in self.nodes.keys():
+        while curr_node.parent_frame_id in self.nodes.keys() and curr_node.frame_id != curr_node.parent_frame_id:
             curr_node = self.nodes[curr_node.parent_frame_id]
             branch.insert(0, curr_node)
 
@@ -105,7 +130,10 @@ class TfTree:
         branch2 = self.get_branch(frame2)
 
         #LCA doesnt exist iff. roots are different
-        if branch1[0].frame_id != branch2[0].frame_id:
+        branch1_root_fid = branch1[0].parent_frame_id if len(branch1) > 0 else frame1
+        branch2_root_fid = branch2[0].parent_frame_id if len(branch2) > 0 else frame2
+
+        if branch1_root_fid != branch2_root_fid:
             return None
 
         depth = 0
@@ -145,13 +173,43 @@ class TfManager:
     def to(self, device):
         self.device = device
 
+    def update_from_calib_config(self, calib_config):
+        for calib_tf in calib_config['transform_params']:
+            src_frame = calib_tf['from_frame']
+            dst_frame = calib_tf['to_frame']
+
+            if dst_frame in self.tf_tree.nodes.keys():
+                tf_node = self.tf_tree.nodes[dst_frame]
+
+                if not tf_node.is_static:
+                    print('tf {}->{} is not static. Skipping...'.format(src_frame, dst_frame))
+                    continue
+
+                if tf_node.parent_frame_id != src_frame and tf_node.parent_frame_id != "/ROOT":
+                    print('got tf {}->{} in calib, but is {}->{} in data. Skipping...'.format(src_frame, dst_frame, tf_node.parent_frame_id, dst_frame))
+                else:
+                    print('updating tf {}->{}'.format(src_frame, dst_frame))
+                    transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
+                    res = self.add_static_tf(src_frame, dst_frame, transform)
+
+            else:
+                print('couldnt find tf {}->{} in tf tree! Adding...'.format(src_frame, dst_frame))
+                transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
+                res = self.add_static_tf(src_frame, dst_frame, transform)
+
+                if not res:
+                    print('couldnt add tf!')
+
+    def add_static_tf(self, src_frame, dst_frame, transform):
+        return self.tf_tree.add_static_tf(parent_frame_id=src_frame, frame_id=dst_frame, transform=transform)
+
     def to_kitti(self, run_dir):
         base_dir = os.path.join(run_dir, 'tf')
 
         metadata = {"frames": []}
 
         for node in self.tf_tree.nodes.values():
-            if node.parent_frame_id == "":
+            if node.parent_frame_id == "/ROOT":
                 continue
 
             metadata["frames"].append({
@@ -212,7 +270,6 @@ class TfManager:
         tf_manager.tf_tree = TfTree(nodes=[TfNode(**v) for v in frames.values()])
     
         return tf_manager
-
 
     def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu'):
         tf_manager = TfManager(device)
@@ -332,9 +389,12 @@ class TfManager:
 
 if __name__ == '__main__':
     import time
+    import yaml
 
-    bag_fp = "/home/tartandriver/rosbags/2025-05-23-jpl9_trabuco/192722_fan_course_survey_merged2"
-    # bag_fp = "/home/tartandriver/rosbags/2025-05-23-jpl9_trabuco/185744_trabuco_brake_checks"
+    bag_fp = "/media/striest/offroad/rosbags/20250508/teleop/power_tower_sidehill6/"
+    calib_fp = "/home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml"
+
+    calib_config = yaml.safe_load(open(calib_fp, 'r'))
 
     kitti_fp = '/home/tartandriver/workspace/aaa'
 
@@ -342,12 +402,13 @@ if __name__ == '__main__':
     # tf_manager.to_kitti(kitti_fp)
 
     tf_manager = TfManager.from_kitti(kitti_fp, device='cuda')
+    tf_manager.update_from_calib_config(calib_config)
 
     print(tf_manager.tf_tree)
 
-    src_frame = 'crl_rzr/map'
-    dst_frame = 'crl_rzr/velodyne_front_horiz_link'
-    # src_frame = 'crl_rzr/multisense_front/aux_camera_frame'
+    src_frame = 'sensor_init'
+    dst_frame = 'thermal_left/camera_link'
+    # dst_frame = 'thermal_left/optical_frame'
 
     trange = tf_manager.get_valid_times(src_frame, dst_frame)
 

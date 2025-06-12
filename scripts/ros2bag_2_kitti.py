@@ -107,26 +107,8 @@ if __name__ == '__main__':
     frame_list = set()
 
     if has_calib_file:
-        for calib_tf in calib_config['transform_params']:
-            src_frame = calib_tf['from_frame']
-            dst_frame = calib_tf['to_frame']
+        tf_manager.update_from_calib_config(calib_config)
 
-            if dst_frame in tf_manager.tf_tree.nodes.keys():
-                tf_node = tf_manager.tf_tree.nodes[dst_frame]
-
-                if tf_node.parent_frame_id != src_frame:
-                    print('got tf {}->{} in calib, but is {}->{} in data. Skipping...'.format(src_frame, dst_frame, tf_node.parent_frame_id, dst_frame))
-                    continue
-
-                if not tf_node.is_static:
-                    print('tf {}->{} is not static. Skipping...'.format(src_frame, dst_frame))
-                    continue
-
-                tf_node.transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
-
-            else:
-                print('couldnt find tf {}->{} in tf tree!'.format(src_frame, dst_frame))
-                
     tf_manager.to_kitti(args.dst_dir)
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
@@ -164,6 +146,9 @@ if __name__ == '__main__':
 
     # debug code
     if args.dryrun:
+        print('TF TREE:\n')
+        print(tf_manager.tf_tree)
+
         import matplotlib.pyplot as plt
         plt.plot(queue['target_times'], marker='.', label='target_times')
 
