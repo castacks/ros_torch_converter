@@ -7,7 +7,7 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
-  data:
+  topics:
     - name: odom
       topic: /superodometry/integrated_to_init #namespaced in new bags
       type: OdomRBState

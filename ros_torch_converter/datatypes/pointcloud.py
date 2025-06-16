@@ -30,7 +30,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
         out.frame_id = self.frame_id
         return out
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         #HACK to get ros2_numpy to cooperate with rosbags dtypes.
         #TODO write a script to do this for all types
         if type(msg) != PointCloud2:
@@ -42,7 +42,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
         pcl_np = ros2_numpy.numpify(msg)
         xyz = pcl_np['xyz']
 
-        res.pts = torch.tensor(xyz).float().to(res.device)
+        res.pts = torch.tensor(xyz.copy()).float().to(res.device)
 
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
@@ -167,7 +167,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     def non_feature_pts(self):
         return self.pts[~self.feat_mask]
 
-    def from_rosmsg(msg, device):
+    def from_rosmsg(self, msg, device):
         warnings.warn('havent implemented ros->featpc yet')
         res = FeaturePointCloudTorch(device=device)
         return res

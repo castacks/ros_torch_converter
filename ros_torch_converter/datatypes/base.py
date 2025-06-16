@@ -28,7 +28,7 @@ class TorchCoordinatorDataType(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def from_rosmsg(msg, device):
+    def from_rosmsg(self, msg, device):
         """define how to convert this datatype from a ros message
         """
         pass

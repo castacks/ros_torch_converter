@@ -3,6 +3,7 @@ import cv2
 import torch
 import cv_bridge
 import warnings
+import ros2_numpy
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
@@ -54,7 +55,7 @@ class ImageTorch(TorchCoordinatorDataType):
         img_msg.header.frame_id = self.frame_id
         return img_msg
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         res = ImageTorch(device)
         img = res.bridge.imgmsg_to_cv2(msg)[..., :3]
         img = torch.from_numpy(img/255.).float().to(device)
@@ -128,7 +129,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
         img_msg.header.frame_id = self.frame_id
         return img_msg
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         '''
         Read 8-bit processed image from ROS message
         '''
@@ -195,7 +196,7 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
          img_msg.header.frame_id = self.frame_id
          return img_msg
      
-     def from_rosmsg(msg, device='cpu'):
+     def from_rosmsg(self, msg, device='cpu'):
          '''Read 16-bit raw image from ROS message. Return as torch tensor.'''
          res = Thermal16bitImageTorch(device)
          img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
@@ -234,7 +235,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     to_rosmsg_type = FeatureImage
     from_rosmsg_type = FeatureImage
 
-    def __init__(self, device):
+    def __init__(self, device='cpu'):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
         self.device = device
@@ -247,7 +248,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         res.image = image.float()
         return res
 
-    def from_numpy(image, device):
+    def from_numpy(image, device='cpu'):
         if image.dtype != np.float32:
             warnings.warn('Got image type that isnt float32!')
 
@@ -255,9 +256,14 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         res.image = torch.tensor(image, dtype=torch.float32, device=device)
         return res
     
-    def from_rosmsg(msg, device):
-        warnings.warn('havent implemented featureimg->ros')
-        return None
+    def from_rosmsg(self, msg, device='cpu'):
+        res = FeatureImageTorch(device=device)
+        import pdb; pdb.set_trace()
+        res.image = torch.tensor(msg.data).float().to(res.device)
+
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
 
     def to_rosmsg(self):
         msg = FeatureImage()
@@ -275,6 +281,9 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     def to_kitti(self, base_dir, idx):
         """define how to convert this dtype to a kitti file
         """
+        save_fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
+        img = self.image.cpu().numpy()
+        np.save(save_fp, img)
         pass
 
     def from_kitti(self, base_dir, idx, device):

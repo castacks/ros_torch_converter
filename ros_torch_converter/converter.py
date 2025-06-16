@@ -7,9 +7,11 @@ from rclpy.qos import qos_profile_sensor_data
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.command import CommandTorch
+from ros_torch_converter.datatypes.imu import ImuTorch
 from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch, Thermal16bitImageTorch
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
 from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
+from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
@@ -20,12 +22,14 @@ str_to_cvt_class = {
     "BEVGrid": BEVGridTorch,
     "Float32": Float32Torch,
     "Command": CommandTorch,
+    "Imu": ImuTorch,
     "Image": ImageTorch,
     "FeatureImage": FeatureImageTorch,
     "ThermalImage": ThermalImageTorch,
     "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
     "PointCloud": PointCloudTorch,
+    "VoxelGrid": VoxelGridTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
     "Transform": TransformTorch,
     "OdomTransform": OdomTransformTorch,

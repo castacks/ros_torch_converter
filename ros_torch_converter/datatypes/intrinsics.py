@@ -20,7 +20,7 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         self.intrinsics = torch.zeros(3, 3, device=device)
         self.device = device
     
-    def from_rosmsg(msg, use_p=True, device='cpu'):
+    def from_rosmsg(self, msg, use_p=True, device='cpu'):
         res = IntrinsicsTorch(device=device)
         if use_p:
             res.intrinsics = torch.tensor(msg.p, device=device).reshape(3, 4)[:3, :3]

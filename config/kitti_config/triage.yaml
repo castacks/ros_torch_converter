@@ -7,7 +7,7 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
-  data:
+  topics:
     - name: odom
       topic: /spot1/base/autonomy/slam/aft_mapped_to_init
       type: OdomRBState

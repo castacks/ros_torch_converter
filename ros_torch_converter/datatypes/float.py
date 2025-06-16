@@ -18,7 +18,7 @@ class Float32Torch(TorchCoordinatorDataType):
         self.data = torch.zeros(1, device=device)
         self.device = device
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         res = Float32Torch(device=device)
         res.data = torch.tensor([msg.data], device=device)
         return res

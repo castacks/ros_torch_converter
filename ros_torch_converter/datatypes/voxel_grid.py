@@ -33,7 +33,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         res.voxel_grid = voxel_grid
         return res
     
-    def from_rosmsg(msg, feature_keys=[], device='cpu'):
+    def from_rosmsg(self, msg, feature_keys=[], device='cpu'):
         return None
 
     def to_rosmsg(self):

@@ -36,7 +36,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
         res.bev_grid = bev_grid
         return res
     
-    def from_rosmsg(msg, feature_keys=[], device='cpu'):
+    def from_rosmsg(self, msg, feature_keys=[], device='cpu'):
         res = BEVGridTorch(device=device)
         orientation = np.array(
             [
@@ -268,7 +268,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
         data = self.bev_grid.data.cpu().numpy()
         np.save(data_fp, data)
 
-    def from_kitti(base_dir, idx, device='cpu'):
+    def from_kitti(self, base_dir, idx, device='cpu'):
         data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 

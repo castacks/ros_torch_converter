@@ -1,0 +1,108 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  device: cuda
+
+  topics:
+    # Odom and waypoints
+    - name: odometry
+      topic: /superodometry/integrated_to_init
+      type: OdomRBState
+      args: {}
+
+    # GPS odom tf issues
+    # - name: gps_odom
+    #   topic: /odometry/filtered_odom
+    #   type: OdomRBState
+    #   args: {}
+
+    - name: goals
+      topic: /next_waypoints/odom
+      type: GoalArray
+      args: {}
+
+    # Perception sensors
+    - name: image_intrinsics
+      topic: /multisense/left/image_rect_color/camera_info
+      type: Intrinsics
+      args: {}
+
+    - name: image
+      topic: /multisense/left/image_rect_color
+      type: Image
+      args: {}
+    
+    # Thermal tf issues
+    # - name: thermal_left_processed
+    #   topic: /thermal_left/image_processed
+    #   type: ThermalImage
+    #   args: {}
+    
+    # - name: thermal_right_processed
+    #   topic: /thermal_right/image_processed
+    #   type: ThermalImage
+    #   args: {}
+
+    - name: pointcloud
+      topic: /velodyne_1/velodyne_points
+      type: PointCloud
+      args: {}
+    
+    # Features not implemented
+    # - name: feature_image
+    #   topic: /feature_image
+    #   type: Image # FeatureImage
+    #   args: {}
+
+    # - name: feature_voxels
+    #   topic: /dino_voxels_viz
+    #   type: VoxelGrid
+    #   args: {}
+
+    # Mapping
+    - name: pointcloud_in_odom
+      topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
+      type: PointCloud
+      args: {}
+
+    - name: local_navmap
+      topic: /local_navmap
+      type: BEVGrid
+      args: {}
+    
+    # Dynamics
+    - name: steer_angle
+      topic: /talon/current_position
+      type: Float32
+      args: {}
+
+    # different frequency
+    # - name: imu
+    #   topic: /novatel/imu/data
+    #   type: Imu
+    #   args: {}
+
+    # Commands
+    - name: command
+      topic: /mux/cmd
+      type: Command
+      args: {}
+
+    - name: teleop_command
+      topic: /teleop_cmd
+      type: Command
+      args: {}
+
+    - name: auto_command
+      topic: /auto_cmd
+      type: Command
+      args: {}

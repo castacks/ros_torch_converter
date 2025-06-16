@@ -20,7 +20,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         self.state = torch.zeros(13, device=device)
         self.device = device
 
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         res = OdomRBStateTorch(device=device)
 
         res.state = torch.tensor([

@@ -20,7 +20,7 @@ class GoalArrayTorch(TorchCoordinatorDataType):
         self.goals = torch.zeros(0, 3, device=device)
         self.device = device
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         res = GoalArrayTorch(device)
         
         for pose in msg.poses:

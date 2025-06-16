@@ -19,7 +19,7 @@ class CommandTorch(TorchCoordinatorDataType):
         self.state = torch.zeros(2, device=device)
         self.device = device
 
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(self, msg, device='cpu'):
         res = CommandTorch(device=device)
 
         res.state = torch.tensor([

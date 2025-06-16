@@ -124,7 +124,8 @@ if __name__ == '__main__':
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
-                frame_list.add(msg.header.frame_id)
+                if msg.header.frame_id not in ['', 'auto', 'joy', 'teleop']:
+                    frame_list.add(msg.header.frame_id)
             else:
                 msg_time = timestamp * 1e-9
 
@@ -150,6 +151,7 @@ if __name__ == '__main__':
         print(tf_manager.tf_tree)
 
         import matplotlib.pyplot as plt
+        print(tf_manager.tf_tree)
         plt.plot(queue['target_times'], marker='.', label='target_times')
 
         x = np.arange(len(queue['target_times']))
@@ -231,8 +233,10 @@ if __name__ == '__main__':
                 print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
                 checks[topic].append(idxs)
 
-                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
-                torch_data = torch_dtype.from_rosmsg(msg)
+                # print(topic)
+                # print(connection.msgtype)
+                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]('cuda')
+                torch_data = torch_dtype.from_rosmsg(msg, device='cuda')
 
                 base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:

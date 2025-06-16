@@ -22,7 +22,7 @@ class TransformTorch(TorchCoordinatorDataType):
         self.transform = torch.zeros(4, 4, device=device)
         self.device = device
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(self, msg, device):
         res = TransformTorch(device=device)
         pq = np.array([
             msg.transform.translation.x,
@@ -92,7 +92,7 @@ class OdomTransformTorch(TransformTorch):
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(self, msg, device):
         res = TransformTorch(device=device)
         pq = np.array([
             msg.pose.pose.position.x,
