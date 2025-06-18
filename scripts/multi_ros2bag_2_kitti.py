@@ -49,7 +49,6 @@ if __name__ == '__main__':
         if res.returncode == 0:
             success_dirs.append(dst_path)
             success_rosbag_dirs.append(rosbag_dir)
-            break
         else:
             fail_dirs.append(dst_path)
 
