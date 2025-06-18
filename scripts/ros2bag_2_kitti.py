@@ -3,6 +3,7 @@ import yaml
 import argparse
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 from pathlib import Path
 
@@ -62,15 +63,15 @@ if __name__ == '__main__':
     parser.add_argument('--src_dir', type=str, required=True, help='path to input dir')
     parser.add_argument('--dst_dir', type=str, required=True, help='path to output dir')
     parser.add_argument('--dryrun', action='store_true', help='set this flag to check data w/o parsing it')
+    parser.add_argument('--no_plot', action='store_true', help='set this flag to not display the plot')
+    parser.add_argument('--force', action='store_true', help='dont ask to overwrite')
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
     args = parser.parse_args()
 
-    if os.path.exists(args.dst_dir):
+    if os.path.exists(args.dst_dir) and not args.force:
         x = input('{} exists. Overwrite? [Y/n]'.format(args.dst_dir))
         if x == 'n':
             exit(0)
-
-    os.makedirs(args.dst_dir, exist_ok=True)
 
     config = yaml.safe_load(open(args.config, 'r'))
     target_topics = [x['topic'] for x in config['topics']]
@@ -87,29 +88,8 @@ if __name__ == '__main__':
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
 
-    has_calib_file = False
-    #update the tf tree
-    if 'calib_file' in config.keys():
-        print('applying calib file from config...')
-        calib_config = yaml.safe_load(open(config['calib_file'], 'r'))
-        has_calib_file = True
-
-    elif args.calib_file is not None:
-        print('applying calib file from cli...')
-        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
-        has_calib_file = True
-
-    if not has_calib_file:
-        print('no calib file provided. Note that for Yamaha data this is probably wrong!')
-
-    print('handling tf...')
-    tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
     frame_list = set()
 
-    if has_calib_file:
-        tf_manager.update_from_calib_config(calib_config)
-
-    tf_manager.to_kitti(args.dst_dir)
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
@@ -141,40 +121,29 @@ if __name__ == '__main__':
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
 
+    #update the tf tree
     frame_list = list(frame_list)
+    has_calib_file = False
+    if 'calib_file' in config.keys():
+        print('applying calib file from config...')
+        calib_config = yaml.safe_load(open(config['calib_file'], 'r'))
+        has_calib_file = True
+
+    elif args.calib_file is not None:
+        print('applying calib file from cli...')
+        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
+        has_calib_file = True
+
+    if not has_calib_file:
+        print('no calib file provided. Note that for Yamaha data this is probably wrong!')
+
+    print('handling tf...')
+    tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+
+    if has_calib_file:
+        tf_manager.update_from_calib_config(calib_config)
+
     tf_tmin, tf_tmax = tf_manager.get_valid_times_from_list(frame_list)
-
-    # debug code
-    if args.dryrun:
-        print('TF TREE:\n')
-        print(tf_manager.tf_tree)
-
-        import matplotlib.pyplot as plt
-        plt.plot(queue['target_times'], marker='.', label='target_times')
-
-        x = np.arange(len(queue['target_times']))
-
-        if tf_tmin > 0.:
-            idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
-            plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
-
-        if tf_tmax < 1e16:
-            idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
-            plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
-
-        for topic in target_topics:
-            times = queue['topic_times'][topic]
-            error = queue['topic_error'][topic]
-            mask = error < config['interp_tol']
-            plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
-
-        plt.title('time sync graph')
-        plt.legend()
-        plt.show()
-        exit(0)
-
-    #save tf
-    tf_manager.to_kitti(args.dst_dir)
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
@@ -185,6 +154,8 @@ if __name__ == '__main__':
     for topic, times in queue['topic_times'].items():
         all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
 
+    assert all_valid_mask.any(), "topics not sync'ed!"
+
     queue['target_times'] = queue['target_times'][all_valid_mask]
 
     for topic in queue['topic_times'].keys():
@@ -194,6 +165,7 @@ if __name__ == '__main__':
     print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
     n_frames = all_valid_mask.shape[0]
 
+    os.makedirs(args.dst_dir, exist_ok=True)
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
@@ -206,6 +178,42 @@ if __name__ == '__main__':
         np.savetxt(os.path.join(topic_dir, 'errors.txt'), queue['topic_error'][topic])
 
     checks = {k:[] for k in target_topics}
+
+    tf_manager.to_kitti(args.dst_dir)
+
+    print('TF TREE:\n')
+    print(tf_manager.tf_tree)
+
+    plt.plot(queue['target_times'], marker='.', label='target_times')
+
+    x = np.arange(len(queue['target_times']))
+
+    if tf_tmin > 0.:
+        idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
+        plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
+
+    if tf_tmax < 1e16:
+        idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
+        plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
+
+    for topic in target_topics:
+        times = queue['topic_times'][topic]
+        error = queue['topic_error'][topic]
+        mask = error < config['interp_tol']
+        plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
+
+    plt.title('time sync graph')
+    plt.legend()
+
+    plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
+
+    #save tf
+    tf_manager.to_kitti(args.dst_dir)
+
+    if args.dryrun:
+        if not args.no_plot:
+            plt.show()
+        exit(0)
 
     # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
     with AnyReader([bagpath], default_typestore=typestore) as reader:
