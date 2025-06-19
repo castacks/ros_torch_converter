@@ -15,6 +15,9 @@ def is_rosbag_dir(fp):
     return has_metadata and has_mcaps
 
 if __name__ == '__main__':
+    """
+    recommend running this script as python3 multi_rosbag_to_kitti.py 2>&1 | tee log.txt
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--src_dir', type=str, required=True, help='base dir of run dirs to proc')
     parser.add_argument('--dst_dir', type=str, required=True, help='base dir of save')
@@ -32,6 +35,7 @@ if __name__ == '__main__':
         print('\t' + rdir)
 
     base_cmd = "python3 ros2bag_2_kitti.py --config {} --src_dir {} --dst_dir {} --dryrun --no_plot --force"
+    # base_cmd = "ls {}" #if theres a bug in the second part of the script this serves as a cache
 
     success_rosbag_dirs = []
     success_dirs = []
@@ -43,6 +47,7 @@ if __name__ == '__main__':
         dst_path = os.path.join(args.dst_dir, relpath)
 
         cmd = base_cmd.format(args.config_fp, rosbag_dir, dst_path)
+        # cmd = base_cmd.format(dst_path)
 
         res = subprocess.run(cmd.split(" "))
 
@@ -66,10 +71,9 @@ if __name__ == '__main__':
         res = subprocess.run(cmd.split(" "))
 
         if res.returncode == 0:
-            success_dirs.append(dst_path)
-            break
+            success_proc_dirs.append(dst_path)
         else:
-            fail_dirs.append(dst_path)
+            fail_proc_dirs.append(dst_path)
 
     print('successfully extracted data for {}/{} proc dirs'.format(len(success_proc_dirs), len(success_dirs)))
 
