@@ -293,7 +293,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
         
         gt = BEVGridTorch.from_bev_grid(bev_grid)
         
-        return bev_grid
+        return gt
 
     def to(self, device):
         self.device = device
