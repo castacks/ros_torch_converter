@@ -41,8 +41,8 @@ class TfNode:
             self.transforms = transforms[idxs]
 
             self.interp = TrajectoryInterpolator(self.times, self.transforms)
-            self.t_min = times.min()
-            self.t_max = times.max()
+            self.t_min = times.min() - self.interp._tol
+            self.t_max = times.max() + self.interp._tol
 
         self.depth = depth
 
@@ -99,6 +99,20 @@ class TfTree:
 
         node = TfNode(frame_id=frame_id, parent_frame_id=parent_frame_id, transforms=[transform], times=None, is_static=True)
 
+        self.nodes[frame_id] = node
+        self.recompute_depth()
+
+        return True
+
+    def add_tf(self, frame_id, parent_frame_id, transforms, times):
+        if frame_id in self.nodes.keys():
+            curr_parent_frame_id = self.nodes[frame_id].parent_frame_id
+            if curr_parent_frame_id != parent_frame_id:
+                print('warning: overwriting tf {}->{} to {}->{}'.format(
+                    curr_parent_frame_id, frame_id, parent_frame_id, frame_id
+                ))
+            
+        node = TfNode(frame_id=frame_id, parent_frame_id=parent_frame_id, transforms=transforms, times=times, is_static=False)
         self.nodes[frame_id] = node
         self.recompute_depth()
 
@@ -168,10 +182,12 @@ class TfManager:
         tf2.transform_listener, but with the kitti datasets
     """
     def __init__(self, device):
+        self.tf_tree = TfTree(nodes=[])
         self.device = device
 
     def to(self, device):
         self.device = device
+        return self
 
     def update_from_calib_config(self, calib_config):
         for calib_tf in calib_config['transform_params']:
@@ -202,6 +218,9 @@ class TfManager:
 
     def add_static_tf(self, src_frame, dst_frame, transform):
         return self.tf_tree.add_static_tf(parent_frame_id=src_frame, frame_id=dst_frame, transform=transform)
+
+    def add_tf(self, src_frame, dst_frame, transforms, times):
+        return self.tf_tree.add_tf(parent_frame_id=src_frame, frame_id=dst_frame, transforms=transforms, times=times)
 
     def to_kitti(self, run_dir):
         base_dir = os.path.join(run_dir, 'tf')
@@ -364,7 +383,7 @@ class TfManager:
 
     def can_transform(self, src_frame, dst_frame, t):
         tmin, tmax = self.get_valid_times(src_frame, dst_frame)
-        return t > tmin and t < tmax
+        return t >= tmin and t <= tmax
 
     def get_transform(self, frame1, frame2, t):
         """
