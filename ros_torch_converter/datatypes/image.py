@@ -56,14 +56,17 @@ class ImageTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = ImageTorch(device)
-        img = res.bridge.imgmsg_to_cv2(msg)[..., :3]
-        img = torch.from_numpy(img/255.).float().to(device)
+        img = res.bridge.imgmsg_to_cv2(msg)
+        if img.ndim == 3:  # Color image
+            img = img[..., :3]
+        # For grayscale, do nothing
+        img = torch.from_numpy(img / 255.).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
 
-    def to_kitti(self, base_dir, idx):
+    def to_kitti(self, base_dir, idx):        
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = (self.image * 255.).long().cpu().numpy()
         cv2.imwrite(save_fp, img)
@@ -225,7 +228,7 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
      def __repr__(self):
          return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
      
-class FeatureImageTorch(TorchCoordinatorDataType):
+class FeatureImageTorch(TorchCoordinatorDataType): 
     """
     TorchCoordinator class for feature images
     unlike ImageTorch, this class can take arbitrary image channels/features,
@@ -234,16 +237,17 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     to_rosmsg_type = FeatureImage
     from_rosmsg_type = FeatureImage
 
-    def __init__(self, device):
+    def __init__(self, feature_key_list, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
+        self.feature_key_list = feature_key_list
         self.device = device
 
-    def from_torch(image):
+    def from_torch(image, feature_key_list):
         if image.dtype != torch.float32:
             warnings.warn('Got image type that isnt float32!')
 
-        res = FeatureImageTorch(device=image.device)
+        res = FeatureImageTorch(feature_key_list, device=image.device)
         res.image = image.float()
         return res
 

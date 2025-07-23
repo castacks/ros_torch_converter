@@ -11,6 +11,7 @@ from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from grid_map_msgs.msg import GridMap
@@ -98,12 +99,12 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.header.stamp = time_to_stamp(self.stamp)
         gridmap_msg.header.frame_id = self.frame_id
 
-        gridmap_msg.layers = copy.deepcopy(self.bev_grid.feature_keys)
+        gridmap_msg.layers = copy.deepcopy(self.bev_grid.feature_key_list.label)
 
-        has_unk = 'min_elevation_filtered_inflated_mask' in self.bev_grid.feature_keys
+        has_unk = 'min_elevation_filtered_inflated_mask' in self.bev_grid.feature_key_list.label
 
         if has_unk:
-            unk_idx = self.bev_grid.feature_keys.index('min_elevation_filtered_inflated_mask')
+            unk_idx = self.bev_grid.feature_key_list.index('min_elevation_filtered_inflated_mask')
             unk = np.copy(gridmap_data[..., unk_idx])
             unk[unk < 0.1] = float('nan')
             gridmap_data = np.concatenate([gridmap_data, np.expand_dims(unk,-1)], axis=-1)
@@ -203,8 +204,8 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
-        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys):
-            viz_idxs = [self.bev_grid.feature_keys.index(k) for k in viz_layers]
+        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_key_list.label):
+            viz_idxs = [self.bev_grid.feature_key_list.label.index(k) for k in viz_layers]
             gridmap_rgb = gridmap_data[..., viz_idxs]
             vmin = gridmap_rgb.reshape(-1, 3).min(axis=0).reshape(1, 1, 3)
             vmax = gridmap_rgb.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
@@ -257,7 +258,12 @@ class BEVGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
-            'feature_keys': self.bev_grid.feature_keys,
+            'feature_keys': [
+                f"{label}, {meta}" for label, meta in zip(
+                    self.bev_grid.feature_key_list.label,
+                    self.bev_grid.feature_key_list.metadata
+                )
+            ],
             'length': self.bev_grid.metadata.length.cpu().numpy().tolist(),
             'origin': self.bev_grid.metadata.origin.cpu().numpy().tolist(),
             'resolution': self.bev_grid.metadata.resolution.cpu().numpy().tolist()
@@ -273,28 +279,28 @@ class BEVGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = yaml.safe_load(open(metadata_fp))
-        fks = metadata['feature_keys']
-
+        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+        feature_key_list = FeatureKeyList(label=list(labels), metadata=list(metas))
+        
         metadata = LocalMapperMetadata(
             origin = metadata['origin'],
             length = metadata['length'],
             resolution = metadata['resolution'],
             device = device
         )
-        
+
         bev_grid = BEVGrid(
             metadata = metadata,
-            n_features = len(fks),
-            feature_keys = fks,
+            n_features = len(feature_key_list),
+            feature_key_list = feature_key_list,
         )
         
         data = np.load(data_fp)
         bev_grid.data = torch.tensor(data, dtype=torch.float, device=device)
         
         gt = BEVGridTorch.from_bev_grid(bev_grid)
-        
         return gt
-
+    
     def to(self, device):
         self.device = device
         self.bev_grid = self.bev_grid.to(device)

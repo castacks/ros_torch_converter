@@ -143,11 +143,12 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
 
-    def __init__(self, device):
+    def __init__(self, feature_key_list, device):
         super().__init__()
         self.pts = torch.zeros(0, 3, device=device)
         self.features = torch.zeros(0, 0, device=device)
         self.feat_mask = torch.zeros(0, device=device, dtype=torch.bool)
+        self.feature_key_list = feature_key_list
         self.device = device
 
     def clone(self):
@@ -172,11 +173,11 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         res = FeaturePointCloudTorch(device=device)
         return res
 
-    def from_torch(pts, features, mask):
+    def from_torch(pts, features, mask, feature_key_list):
         assert len(mask) == len(pts), "expected len(mask) == len(pts)"
         assert mask.sum() == len(features), "expected mask.sum() == len(features)"
 
-        res = FeaturePointCloudTorch(device=pts.device)
+        res = FeaturePointCloudTorch(feature_key_list, device=pts.device)
         res.pts = pts.float()
         res.features = features.float()
         res.feat_mask = mask.bool()
