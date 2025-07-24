@@ -5,12 +5,14 @@ import cv_bridge
 import warnings
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-
 from sensor_msgs.msg import Image, CompressedImage
 from perception_interfaces.msg import FeatureImage
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
+
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 class ImageTorch(TorchCoordinatorDataType):
     """
@@ -24,6 +26,10 @@ class ImageTorch(TorchCoordinatorDataType):
     def __init__(self, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
+        self.feature_keys = FeatureKeyList(
+            label=['r', 'g', 'b'],
+            metainfo=['raw'] * 3
+        )
         self.bridge = cv_bridge.CvBridge()
         self.device = device
 
@@ -87,7 +93,7 @@ class ImageTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
+        return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
 
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
@@ -237,25 +243,25 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     to_rosmsg_type = FeatureImage
     from_rosmsg_type = FeatureImage
 
-    def __init__(self, feature_key_list, device):
+    def __init__(self, feature_keys, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
-        self.feature_key_list = feature_key_list
+        self.feature_keys = feature_keys
         self.device = device
 
-    def from_torch(image, feature_key_list):
+    def from_torch(image, feature_keys):
         if image.dtype != torch.float32:
             warnings.warn('Got image type that isnt float32!')
 
-        res = FeatureImageTorch(feature_key_list, device=image.device)
+        res = FeatureImageTorch(feature_keys=feature_keys, device=image.device)
         res.image = image.float()
         return res
 
-    def from_numpy(image, device):
+    def from_numpy(image, feature_keys, device):
         if image.dtype != np.float32:
             warnings.warn('Got image type that isnt float32!')
 
-        res = FeatureImageTorch(device=device)
+        res = FeatureImageTorch(feature_keys=feature_keys, device=device)
         res.image = torch.tensor(image, dtype=torch.float32, device=device)
         return res
     
@@ -292,4 +298,4 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
+        return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)

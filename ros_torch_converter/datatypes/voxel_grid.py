@@ -102,8 +102,8 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         metadata = {
             'feature_keys': [
                 f"{label}, {meta}" for label, meta in zip(
-                    self.voxel_grid.feature_key_list.label,
-                    self.voxel_grid.feature_key_list.metadata
+                    self.voxel_grid.feature_keys.label,
+                    self.voxel_grid.feature_keys.metainfo
                 )
             ],
             'origin': self.voxel_grid.metadata.origin.tolist(),
@@ -130,7 +130,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
 
         metadata = LocalMapperMetadata(**metadata, device=device)
         labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_key_list = FeatureKeyList(label=list(labels), metadata=list(metas))
+        feature_keys = FeatureKeyList(label=list(labels), metadata=list(metas))
         
         data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
         voxel_data = np.load(data_fp)
@@ -141,7 +141,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
         voxel_grid.hits = torch.tensor(voxel_data['hits'], dtype=torch.long, device=device)
         voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
-        voxel_grid.feature_key_list = feature_key_list
+        voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
         vgt.voxel_grid = voxel_grid
