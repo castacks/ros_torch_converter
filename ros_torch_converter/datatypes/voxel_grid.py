@@ -11,6 +11,7 @@ from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 from physics_atv_visual_mapping.localmapping.voxel.voxel_localmapper import VoxelGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
 from physics_atv_visual_mapping.utils import normalize_dino
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from sensor_msgs.msg import PointCloud2, PointField
 
@@ -99,6 +100,12 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
+            'feature_keys': [
+                f"{label}, {meta}" for label, meta in zip(
+                    self.voxel_grid.feature_keys.label,
+                    self.voxel_grid.feature_keys.metainfo
+                )
+            ],
             'origin': self.voxel_grid.metadata.origin.tolist(),
             'length': self.voxel_grid.metadata.length.tolist(),
             'resolution': self.voxel_grid.metadata.resolution.tolist(),
@@ -112,8 +119,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             'feature_mask': self.voxel_grid.feature_mask.cpu().numpy(),
             'hits': self.voxel_grid.hits.cpu().numpy(),
             'misses': self.voxel_grid.misses.cpu().numpy(),
-        }
-
+        } 
         np.savez(data_fp, **data)
 
     def from_kitti(base_dir, idx, device='cpu'):
@@ -123,7 +129,9 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         metadata = yaml.safe_load(open(metadata_fp, 'r'))
 
         metadata = LocalMapperMetadata(**metadata, device=device)
-
+        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+        feature_keys = FeatureKeyList(label=list(labels), metadata=list(metas))
+        
         data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
         voxel_data = np.load(data_fp)
 
@@ -133,6 +141,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
         voxel_grid.hits = torch.tensor(voxel_data['hits'], dtype=torch.long, device=device)
         voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
+        voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
         vgt.voxel_grid = voxel_grid
@@ -145,4 +154,4 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}".format(self.voxel_grid.features.shape, self.voxel_grid.raster_indices.shape, self.stamp, self.frame_id, self.device)
+        return "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}, features = {}".format(self.voxel_grid.features.shape, self.voxel_grid.raster_indices.shape, self.stamp, self.frame_id, self.device, self.voxel_grid.feature_keys)

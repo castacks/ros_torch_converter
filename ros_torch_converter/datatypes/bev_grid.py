@@ -11,6 +11,7 @@ from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from grid_map_msgs.msg import GridMap
@@ -98,9 +99,9 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.header.stamp = time_to_stamp(self.stamp)
         gridmap_msg.header.frame_id = self.frame_id
 
-        gridmap_msg.layers = copy.deepcopy(self.bev_grid.feature_keys)
+        gridmap_msg.layers = copy.deepcopy(self.bev_grid.feature_keys.label)
 
-        has_unk = 'min_elevation_filtered_inflated_mask' in self.bev_grid.feature_keys
+        has_unk = 'min_elevation_filtered_inflated_mask' in self.bev_grid.feature_keys.label
 
         if has_unk:
             unk_idx = self.bev_grid.feature_keys.index('min_elevation_filtered_inflated_mask')
@@ -203,8 +204,8 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
-        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys):
-            viz_idxs = [self.bev_grid.feature_keys.index(k) for k in viz_layers]
+        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys.label):
+            viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
             gridmap_rgb = gridmap_data[..., viz_idxs]
             vmin = gridmap_rgb.reshape(-1, 3).min(axis=0).reshape(1, 1, 3)
             vmax = gridmap_rgb.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
@@ -257,7 +258,12 @@ class BEVGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
-            'feature_keys': self.bev_grid.feature_keys,
+            'feature_keys': [
+                f"{label}, {meta}" for label, meta in zip(
+                    self.bev_grid.feature_keys.label,
+                    self.bev_grid.feature_keys.metainfo
+                )
+            ],
             'length': self.bev_grid.metadata.length.cpu().numpy().tolist(),
             'origin': self.bev_grid.metadata.origin.cpu().numpy().tolist(),
             'resolution': self.bev_grid.metadata.resolution.cpu().numpy().tolist()
@@ -273,32 +279,32 @@ class BEVGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = yaml.safe_load(open(metadata_fp))
-        fks = metadata['feature_keys']
-
+        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+        feature_keys = FeatureKeyList(label=list(labels), metadata=list(metas))
+        
         metadata = LocalMapperMetadata(
             origin = metadata['origin'],
             length = metadata['length'],
             resolution = metadata['resolution'],
             device = device
         )
-        
+
         bev_grid = BEVGrid(
             metadata = metadata,
-            n_features = len(fks),
-            feature_keys = fks,
+            n_features = len(feature_keys),
+            feature_keys = feature_keys,
         )
         
         data = np.load(data_fp)
         bev_grid.data = torch.tensor(data, dtype=torch.float, device=device)
         
         gt = BEVGridTorch.from_bev_grid(bev_grid)
-        
         return gt
-
+    
     def to(self, device):
         self.device = device
         self.bev_grid = self.bev_grid.to(device)
         return self
     
     def __repr__(self):
-        return "BEVGridTorch of size {}, time = {:.2f}, frame = {}, device = {}".format(self.bev_grid.data.shape, self.stamp, self.frame_id, self.device)
+        return "BEVGridTorch of size {}, time = {:.2f}, frame = {}, device = {} features = {}".format(self.bev_grid.data.shape, self.stamp, self.frame_id, self.device, self.bev_grid.feature_keys)

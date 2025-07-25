@@ -5,12 +5,14 @@ import cv_bridge
 import warnings
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-
 from sensor_msgs.msg import Image, CompressedImage
 from perception_interfaces.msg import FeatureImage
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
+
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 class ImageTorch(TorchCoordinatorDataType):
     """
@@ -24,6 +26,10 @@ class ImageTorch(TorchCoordinatorDataType):
     def __init__(self, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
+        self.feature_keys = FeatureKeyList(
+            label=['r', 'g', 'b'],
+            metainfo=['raw'] * 3
+        )
         self.bridge = cv_bridge.CvBridge()
         self.device = device
 
@@ -56,14 +62,17 @@ class ImageTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = ImageTorch(device)
-        img = res.bridge.imgmsg_to_cv2(msg)[..., :3]
-        img = torch.from_numpy(img/255.).float().to(device)
+        img = res.bridge.imgmsg_to_cv2(msg)
+        if img.ndim == 3:  # Color image
+            img = img[..., :3]
+        # For grayscale, do nothing
+        img = torch.from_numpy(img / 255.).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
 
-    def to_kitti(self, base_dir, idx):
+    def to_kitti(self, base_dir, idx):        
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = (self.image * 255.).long().cpu().numpy()
         cv2.imwrite(save_fp, img)
@@ -84,7 +93,7 @@ class ImageTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
+        return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
 
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
@@ -225,7 +234,7 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
      def __repr__(self):
          return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
      
-class FeatureImageTorch(TorchCoordinatorDataType):
+class FeatureImageTorch(TorchCoordinatorDataType): 
     """
     TorchCoordinator class for feature images
     unlike ImageTorch, this class can take arbitrary image channels/features,
@@ -234,24 +243,25 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     to_rosmsg_type = FeatureImage
     from_rosmsg_type = FeatureImage
 
-    def __init__(self, device):
+    def __init__(self, feature_keys, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
+        self.feature_keys = feature_keys
         self.device = device
 
-    def from_torch(image):
+    def from_torch(image, feature_keys):
         if image.dtype != torch.float32:
             warnings.warn('Got image type that isnt float32!')
 
-        res = FeatureImageTorch(device=image.device)
+        res = FeatureImageTorch(feature_keys=feature_keys, device=image.device)
         res.image = image.float()
         return res
 
-    def from_numpy(image, device):
+    def from_numpy(image, feature_keys, device):
         if image.dtype != np.float32:
             warnings.warn('Got image type that isnt float32!')
 
-        res = FeatureImageTorch(device=device)
+        res = FeatureImageTorch(feature_keys=feature_keys, device=device)
         res.image = torch.tensor(image, dtype=torch.float32, device=device)
         return res
     
@@ -288,4 +298,4 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
+        return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)

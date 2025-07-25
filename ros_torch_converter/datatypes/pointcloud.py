@@ -6,11 +6,13 @@ import warnings
 import ros2_numpy
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-
 from sensor_msgs.msg import PointCloud2, PointField
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
+
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 class PointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
@@ -20,6 +22,10 @@ class PointCloudTorch(TorchCoordinatorDataType):
         super().__init__()
         self.pts = torch.zeros(0, 3, device=device)
         self.colors = torch.zeros(0, 3, device=device)
+        self.feature_keys = FeatureKeyList(
+            label=['x', 'y', 'z'],
+            metainfo=['raw'] * 3
+        )
         self.device = device
 
     def clone(self):
@@ -143,11 +149,12 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
 
-    def __init__(self, device):
+    def __init__(self, feature_keys, device):
         super().__init__()
         self.pts = torch.zeros(0, 3, device=device)
         self.features = torch.zeros(0, 0, device=device)
         self.feat_mask = torch.zeros(0, device=device, dtype=torch.bool)
+        self.feature_keys = feature_keys
         self.device = device
 
     def clone(self):
@@ -172,21 +179,23 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         res = FeaturePointCloudTorch(device=device)
         return res
 
-    def from_torch(pts, features, mask):
+    def from_torch(pts, features, mask, feature_keys):
         assert len(mask) == len(pts), "expected len(mask) == len(pts)"
         assert mask.sum() == len(features), "expected mask.sum() == len(features)"
+        assert features.shape[-1] == len(feature_keys), "expected features.shape[-1] == len(feature_keys)"
 
-        res = FeaturePointCloudTorch(device=pts.device)
+        res = FeaturePointCloudTorch(feature_keys=feature_keys, device=pts.device)
         res.pts = pts.float()
         res.features = features.float()
         res.feat_mask = mask.bool()
         return res
     
-    def from_numpy(pts, features, mask, device):
+    def from_numpy(pts, features, mask, feature_keys, device):
         assert len(mask) == len(pts), "expected len(mask) == len(pts)"
         assert mask.sum() == len(features), "expected mask.sum() == len(features)"
+        assert feature.shape[-1] == len(feature_keys), "expected feature.shape[-1] == len(feature_keys)"
 
-        res = FeaturePointCloudTorch(device=device)
+        res = FeaturePointCloudTorch(feature_keys=feature_keys, device=device)
         res.pts = torch.from_numpy(pts, dtype=torch.float32, device=device)
         res.features = torch.from_numpy(features, dtype=torch.float32, device=device)
         res.feat_mask = torch.from_numpy(mask, dtype=torch.bool, device=device)
@@ -214,4 +223,4 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     
 
     def __repr__(self):
-        return "FeaturePointCloudTorch of shape {} (feats: {}, time = {:.2f}, frame_id = {}, device = {})".format(self.pts.shape, self.features.shape, self.stamp, self.frame_id, self.device)
+        return "FeaturePointCloudTorch of shape {} (feats: {}, feat_size: {}, time = {:.2f}, frame_id = {}, device = {})".format(self.pts.shape, self.feature_keys, self.features.shape, self.stamp, self.frame_id, self.device)

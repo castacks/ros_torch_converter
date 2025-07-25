@@ -1,15 +1,14 @@
 ---
   # Input .mcap file path
-  mcap_dir: /home/tartandriver/rosbags/20250125/2025-01-26-20-55-42_2025-01-25-day-playback/2025-01-26-20-55-42_2025-01-25-day-playback/2025-01-26-20-55-42_2025-01-25-day-playback_0.mcap
-  
+  mcap_dir: /home/tartandriver/rosbags/rr_demo_lap_9/rr_demo_lap_9_0.mcap  
   # Output .ply or .pcd file path
-  output_path: /home/tartandriver/workspace/datasets/yamaha/20250125_day/slam_pcd/20250125_day_test.ply
+  output_path: /home/tartandriver/workspace/datasets/testSceneReconstruct/test_rr_demo_lap_9_0.ply
 
   # PointCloud2 topic name
   topic: /superodometry/velodyne_cloud_registered
 
   # Maximum number of points to save. Comment out to save all points.
-  # max_points: 100000 #start with this for debugging
+  max_points: 100000 #start with this for debugging
 
   # Visualize the point cloud in Open3D before saving
   visualize: true
