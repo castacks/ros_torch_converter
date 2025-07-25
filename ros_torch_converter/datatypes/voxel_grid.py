@@ -154,4 +154,4 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}".format(self.voxel_grid.features.shape, self.voxel_grid.raster_indices.shape, self.stamp, self.frame_id, self.device)
+        return "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}, features = {}".format(self.voxel_grid.features.shape, self.voxel_grid.raster_indices.shape, self.stamp, self.frame_id, self.device, self.voxel_grid.feature_keys)

@@ -307,4 +307,4 @@ class BEVGridTorch(TorchCoordinatorDataType):
         return self
     
     def __repr__(self):
-        return "BEVGridTorch of size {}, time = {:.2f}, frame = {}, device = {}".format(self.bev_grid.data.shape, self.stamp, self.frame_id, self.device)
+        return "BEVGridTorch of size {}, time = {:.2f}, frame = {}, device = {} features = {}".format(self.bev_grid.data.shape, self.stamp, self.frame_id, self.device, self.bev_grid.feature_keys)
