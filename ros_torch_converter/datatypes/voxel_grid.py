@@ -128,14 +128,20 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
         metadata = yaml.safe_load(open(metadata_fp, 'r'))
 
-        metadata = LocalMapperMetadata(**metadata, device=device)
         labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_keys = FeatureKeyList(label=list(labels), metadata=list(metas))
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
         
+        metadata = LocalMapperMetadata(
+            origin=metadata['origin'],
+            length=metadata['length'],
+            resolution=metadata['resolution'],
+            device=device
+        )
+
         data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
         voxel_data = np.load(data_fp)
 
-        voxel_grid = VoxelGrid(metadata, n_features=voxel_data['features'].shape[-1], device=device)
+        voxel_grid = VoxelGrid(metadata, feature_keys=feature_keys, device=device)
         voxel_grid.raster_indices = torch.tensor(voxel_data['raster_indices'], dtype=torch.long, device=device)
         voxel_grid.features = torch.tensor(voxel_data['features'], dtype=torch.float, device=device)
         voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
