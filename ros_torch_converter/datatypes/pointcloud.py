@@ -35,6 +35,14 @@ class PointCloudTorch(TorchCoordinatorDataType):
         out.stamp = self.stamp
         out.frame_id = self.frame_id
         return out
+
+    def apply_mask(self, mask):
+        mask_pts = self.pts[mask]
+        mask_colors = self.colors[mask]
+        return PointCloudTorch.from_torch(
+            pts=mask_pts,
+            colors=mask_colors
+        )
     
     def from_rosmsg(msg, device='cpu'):
         #HACK to get ros2_numpy to cooperate with rosbags dtypes.
@@ -165,6 +173,24 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         out.stamp = self.stamp
         out.frame_id = self.frame_id
         return out
+
+    def apply_mask(self, mask):
+        """
+        Args:
+            mask: [N] bool tensor where N=num pts 
+        Returns: 
+            FeaturePointCloudTorch with masked points
+        """
+        mask_pts = self.pts[mask]
+        mask_feat_mask = self.feat_mask[mask]
+        mask_feats = self.features[mask[self.feat_mask]]
+
+        return FeaturePointCloudTorch.from_torch(
+            pts=mask_pts,
+            features=mask_feats,
+            mask=mask_feat_mask,
+            feature_keys=self.feature_keys
+        )
 
     @property
     def feature_pts(self):
