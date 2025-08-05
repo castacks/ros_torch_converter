@@ -280,7 +280,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         metadata = yaml.safe_load(open(metadata_fp))
         labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_keys = FeatureKeyList(label=list(labels), metadata=list(metas))
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
         
         metadata = LocalMapperMetadata(
             origin = metadata['origin'],
@@ -291,8 +291,8 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         bev_grid = BEVGrid(
             metadata = metadata,
-            n_features = len(feature_keys),
             feature_keys = feature_keys,
+            device=device
         )
         
         data = np.load(data_fp)
