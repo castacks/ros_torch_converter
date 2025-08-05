@@ -37,15 +37,19 @@ class VoxelGridTorch(TorchCoordinatorDataType):
     def from_rosmsg(msg, feature_keys=[], device='cpu'):
         return None
 
-    def to_rosmsg(self):
+    def to_rosmsg(self, midpoints=True):
         """
         For now, colors are a scaling of the first 3 features
         """
         feature_idxs = self.voxel_grid.feature_raster_indices
         non_feature_idxs = self.voxel_grid.non_feature_raster_indices
 
-        all_idxs = torch.cat([feature_idxs, non_feature_idxs])
-        all_pts = self.voxel_grid.grid_indices_to_pts(self.voxel_grid.raster_indices_to_grid_indices(all_idxs))
+        if midpoints:
+            all_pts = torch.cat([self.voxel_grid.feature_midpoints, self.voxel_grid.non_feature_midpoints])
+        else:
+            all_idxs = torch.cat([feature_idxs, non_feature_idxs])
+            all_pts = self.voxel_grid.grid_indices_to_pts(self.voxel_grid.raster_indices_to_grid_indices(all_idxs))
+
         points = all_pts.cpu().numpy().astype(np.float32)
 
         msg = PointCloud2()
