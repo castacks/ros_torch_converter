@@ -123,6 +123,8 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             'feature_mask': self.voxel_grid.feature_mask.cpu().numpy(),
             'hits': self.voxel_grid.hits.cpu().numpy(),
             'misses': self.voxel_grid.misses.cpu().numpy(),
+            'min_coords': self.voxel_grid.min_coords.cpu().numpy(),
+            'max_coords': self.voxel_grid.max_coords.cpu().numpy()
         } 
         np.savez(data_fp, **data)
 
@@ -151,6 +153,8 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
         voxel_grid.hits = torch.tensor(voxel_data['hits'], dtype=torch.long, device=device)
         voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
+        voxel_grid.min_coords = torch.tensor(voxel_data['min_coords'], dtype=torch.float, device=device)
+        voxel_grid.max_coords = torch.tensor(voxel_data['max_coords'], dtype=torch.float, device=device)
         voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
