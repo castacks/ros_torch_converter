@@ -79,10 +79,13 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         bev_grid_data = torch.stack(bev_grid_data, axis=0)
 
-        bev_grid = BEVGrid(metadata=metadata, n_features=bev_grid_data.shape[0], feature_keys=layers_to_extract)
+        fks = FeatureKeyList(
+            label=layers_to_extract,
+            metainfo=['ros'] * len(layers_to_extract)
+        )
+
+        bev_grid = BEVGrid(metadata=metadata, feature_keys=fks)
         bev_grid.data = bev_grid_data
-        #TODO figure out something better than this
-        bev_grid.known = torch.ones(nx, ny, device=device, dtype=torch.bool)
 
         res.bev_grid = bev_grid
         res.stamp = stamp_to_time(msg.header.stamp)
