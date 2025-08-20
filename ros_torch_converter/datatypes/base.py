@@ -22,6 +22,21 @@ class TorchCoordinatorDataType(abc.ABC):
         """
 
     @abc.abstractmethod
+    def rand_init(device='cpu'):
+        """define how to initialize a random instance of this dtype (mostly for tests)
+        (to be called as Class.rand_init())
+        """
+        raise NotImplementedError(
+            f"rand_init() method not implemented"
+        )
+
+    @abc.abstractmethod
+    def __eq__(self, other):
+        """define how to check that two instances of this dtype are equal
+        """
+        pass
+
+    @abc.abstractmethod
     def to_rosmsg(self):
         """define how to convert this datatype to a ros message
         """

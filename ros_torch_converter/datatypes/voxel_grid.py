@@ -7,6 +7,7 @@ import numpy as np
 import ros2_numpy
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from physics_atv_visual_mapping.localmapping.voxel.voxel_localmapper import VoxelGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
@@ -100,6 +101,9 @@ class VoxelGridTorch(TorchCoordinatorDataType):
     def to_kitti(self, base_dir, idx):
         """define how to convert this dtype to a kitti file
         """
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
@@ -160,7 +164,31 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         vgt = VoxelGridTorch(device=device)
         vgt.voxel_grid = voxel_grid
 
+        vgt.stamp = read_timestamp_file(base_dir, idx)
+        vgt.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
         return vgt
+
+    def rand_init(device='cpu'):
+        voxel_grid = VoxelGrid.random_init()
+
+        vgt = VoxelGridTorch.from_voxel_grid(voxel_grid)
+        vgt.frame_id = 'random'
+        vgt.stamp = np.random.rand()
+        
+        return vgt
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if self.voxel_grid != other.voxel_grid:
+            return False
+
+        return True
 
     def to(self, device):
         self.device = device

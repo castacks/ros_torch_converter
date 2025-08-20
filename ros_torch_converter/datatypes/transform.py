@@ -1,7 +1,11 @@
-import numpy as np
+import os
 import torch
+import numpy as np
+
+from scipy.spatial.transform import Rotation as R
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -68,20 +72,85 @@ class TransformTorch(TorchCoordinatorDataType):
         res.child_frame_id = child_frame_id
         return res
 
+    def to_kitti(self, base_dir, idx):
+        """define how to convert this dtype to a kitti file
+        """
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_frame_file(base_dir, idx, 'child_frame_id', self.child_frame_id)
+
+        _data = self.transform[:3].flatten().cpu().numpy()
+
+        save_fp = os.path.join(base_dir, "data.txt")
+        if not os.path.exists(save_fp):
+            data = float('inf') * np.ones([idx+1, 12])
+        else:
+            #need to reshape for 1-row data
+            data = np.loadtxt(save_fp).reshape(-1, 12)
+
+        if data.shape[0] < (idx+1):
+            data_new = float('inf') * np.ones([idx+1, 12])
+            data_new[:data.shape[0]] = data
+            data = data_new
+
+        data[idx] = _data
+
+        np.savetxt(save_fp, data)
+
+    def from_kitti(base_dir, idx, device='cpu'):
+        """define how to convert this dtype from a kitti file
+        """
+        fp = os.path.join(base_dir, "data.txt")
+        _data = np.loadtxt(fp).reshape(-1, 12)[idx]
+        H = np.eye(4)
+        H[:3] = _data.reshape(3, 4)
+        H = torch.tensor(H, dtype=torch.float, device=device)
+
+        child_frame_id = read_frame_file(base_dir, idx, 'child_frame_id')
+
+        tft = TransformTorch.from_torch(H, child_frame_id)
+
+        tft.stamp = read_timestamp_file(base_dir, idx)
+        tft.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return tft
+        
+    def rand_init(device='cpu'):
+        angs = np.random.rand(3) * 2*np.pi
+        rotm = R.from_euler('xyz', angs).as_matrix()
+        rotm = torch.tensor(rotm, dtype=torch.float, device=device)
+
+        trans = torch.rand(3)
+
+        H = torch.eye(4)
+        H[:3, :3] = rotm
+        H[:3, -1] = trans
+
+        tft = TransformTorch.from_torch(H, 'random_child')
+        tft.frame_id = 'random'
+        tft.stamp = np.random.rand()
+
+        return tft
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if self.child_frame_id != other.child_frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.transform, other.transform):
+            return False
+
+        return True
+
     def to(self, device):
         self.device = device
         self.transform = self.transform.to(device)
         return self
-    
-    def to_kitti(self, base_dir, idx):
-        """define how to convert this dtype to a kitti file
-        """
-        pass
-
-    def from_kitti(self, base_dir, idx, device):
-        """define how to convert this dtype from a kitti file
-        """
-        pass
 
     def __repr__(self):
         return "TransformTorch from {} to {} with H:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.child_frame_id, self.transform.cpu().numpy().round(4), self.stamp, self.device)

@@ -13,6 +13,7 @@ from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePoi
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
+from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -22,15 +23,17 @@ str_to_cvt_class = {
     "Command": CommandTorch,
     "Image": ImageTorch,
     "FeatureImage": FeatureImageTorch,
-    "ThermalImage": ThermalImageTorch,
-    "Thermal16bitImage": Thermal16bitImageTorch,
+    #skipping thermal pending a discussion on whether they should be merged into base image
+    # "ThermalImage": ThermalImageTorch,
+    # "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
     "PointCloud": PointCloudTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
     "Transform": TransformTorch,
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
-    "GoalArray": GoalArrayTorch
+    "GoalArray": GoalArrayTorch,
+    "VoxelGridTorch": VoxelGridTorch
 }
 
 class ROSTorchConverter(Node):

@@ -1,4 +1,5 @@
 import os
+import yaml
 import array
 import torch
 import rosbags
@@ -13,6 +14,7 @@ from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 class PointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
@@ -122,21 +124,57 @@ class PointCloudTorch(TorchCoordinatorDataType):
         return msg
 
     def to_kitti(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         save_fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
-        pts = self.pts.cpu().numpy()
+
+        if len(self.pts) == len(self.colors):
+            pts = torch.cat([self.pts, self.colors], dim=-1).cpu().numpy()
+        else:
+            pts = self.pts.cpu().numpy()
+
         np.save(save_fp, pts)
 
-    def from_kitti(base_dir, idx, device):
+    def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
-        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
-        ts = np.loadtxt(timestamp_fp)[idx]
 
         pts = np.load(fp)
         pc = PointCloudTorch(device=device)
-        pc.pts = torch.tensor(pts, device=device).float()
-        pc.stamp = ts
+        pc.pts = torch.tensor(pts[:, :3], device=device).float()
+
+        if pts.shape[-1] == 6:
+            pc.colors = torch.tensor(pts[:, 3:6], device=device).float()
+
+        pc.stamp = read_timestamp_file(base_dir, idx)
+        pc.frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
         return pc
+
+    def rand_init(device='cpu'):
+        pts = torch.rand(10000, 3, device=device)
+        colors = torch.rand(10000, 3, device=device)
+
+        pct = PointCloudTorch.from_torch(pts, colors)
+        pct.frame_id = 'random'
+        pct.stamp = np.random.rand()
+
+        return pct
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.pts, other.pts):
+            return False
+
+        if not torch.allclose(self.colors, other.colors):
+            return False
+
+        return True
 
     def to(self, device):
         self.device = device
@@ -234,12 +272,52 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     def to_kitti(self, base_dir, idx):
         """define how to convert this dtype to a kitti file
         """
-        pass
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        
+        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
-    def from_kitti(self, base_dir, idx, device):
+        metadata = {
+            'feature_keys': [
+                f"{label}, {meta}" for label, meta in zip(
+                    self.feature_keys.label,
+                    self.feature_keys.metainfo
+                )
+            ]
+        }
+
+        yaml.dump(metadata, open(metadata_fp, 'w'))
+
+        data = {
+            'pts': self.pts.cpu().numpy(),
+            'features': self.features.cpu().numpy(),
+            'feat_mask': self.feat_mask.cpu().numpy()
+        } 
+        np.savez(data_fp, **data)
+
+    def from_kitti(base_dir, idx, device='cpu'):
         """define how to convert this dtype from a kitti file
         """
-        pass
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+        metadata = yaml.safe_load(open(metadata_fp, 'r'))
+
+        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
+        
+        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+        pc_data = np.load(data_fp)
+
+        pts = torch.tensor(pc_data['pts'], dtype=torch.float, device=device)
+        features = torch.tensor(pc_data['features'], dtype=torch.float, device=device)
+        mask = torch.tensor(pc_data['feat_mask'], dtype=torch.bool, device=device)
+
+        fpct = FeaturePointCloudTorch.from_torch(pts=pts, features=features, mask=mask, feature_keys=feature_keys)
+
+        fpct.stamp = read_timestamp_file(base_dir, idx)
+        fpct.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return fpct
 
     def to(self, device):
         self.device=device
@@ -247,6 +325,40 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         self.features = self.features.to(device)
         return self
     
+    def rand_init(device='cpu'):
+        pts = torch.rand(10000, 3, device=device)
+        feats = torch.randn(5000, 5, device=device)
+        idxs = torch.randperm(10000)[:5000]
+        mask = torch.zeros(10000, dtype=torch.bool, device=device)
+        mask[idxs] = True
+
+        fks = FeatureKeyList(
+            label = [f"feat_{i}" for i in range(5)],
+            metainfo = ["rand"] * 5
+        )
+
+        fpct = FeaturePointCloudTorch.from_torch(pts=pts, features=feats, mask=mask, feature_keys=fks)
+        fpct.frame_id = 'random'
+        fpct.stamp = np.random.rand()
+        return fpct
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.pts, other.pts):
+            return False
+
+        if not torch.allclose(self.features, other.features):
+            return False
+
+        if not (self.feat_mask == other.feat_mask).all():
+            return False
+
+        return True
 
     def __repr__(self):
         return "FeaturePointCloudTorch of shape {} (feats: {}, feat_size: {}, time = {:.2f}, frame_id = {}, device = {})".format(self.pts.shape, self.feature_keys, self.features.shape, self.stamp, self.frame_id, self.device)
