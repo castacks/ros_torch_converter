@@ -1,8 +1,10 @@
 import os
+import yaml
+import warnings
+
 import cv2
 import torch
 import cv_bridge
-import warnings
 import numpy as np
 
 from sensor_msgs.msg import Image, CompressedImage
@@ -13,6 +15,7 @@ from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 class ImageTorch(TorchCoordinatorDataType):
     """
@@ -73,19 +76,46 @@ class ImageTorch(TorchCoordinatorDataType):
         return res
 
     def to_kitti(self, base_dir, idx):        
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
-        img = (self.image * 255.).long().cpu().numpy()
+        img = (self.image * 255.).long().cpu().numpy().astype(np.uint8)
+        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(save_fp, img)
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "{:08d}.png".format(idx))
-        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
-        ts = np.loadtxt(timestamp_fp)[idx]
-
         img = ImageTorch(device=device)
         img.image = torch.tensor(cv2.cvtColor(cv2.imread(fp), cv2.COLOR_BGR2RGB), device=device).float() / 255.
-        img.stamp = ts
+
+        img.stamp = read_timestamp_file(base_dir, idx)
+        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
         return img
+
+    def rand_init(device='cpu'):
+        #since float->int pixel is lossy, make the eq check work by generating ints
+        data = torch.randint(256, size=(640, 480, 3), device=device)
+        out = ImageTorch.from_torch(data/255.)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+
+        return out
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if self.feature_keys != other.feature_keys:
+            return False
+
+        if not torch.allclose(self.image, other.image):
+            return False
+
+        return True
 
     def to(self, device):
         self.device = device
@@ -285,17 +315,77 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     def to_kitti(self, base_dir, idx):
         """define how to convert this dtype to a kitti file
         """
-        pass
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
 
-    def from_kitti(self, base_dir, idx, device):
+        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+        metadata = {
+            'feature_keys': [
+                f"{label}, {meta}" for label, meta in zip(
+                    self.feature_keys.label,
+                    self.feature_keys.metainfo
+                )
+            ]
+        }
+
+        yaml.dump(metadata, open(metadata_fp, 'w'), default_flow_style=False)
+
+        data = self.image.cpu().numpy()
+        np.save(data_fp, data)
+
+    def from_kitti(base_dir, idx, device='cpu'):
         """define how to convert this dtype from a kitti file
         """
-        pass
+        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+        
+        metadata = yaml.safe_load(open(metadata_fp))
+        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
+
+        data = np.load(data_fp)
+        data = torch.tensor(data, dtype=torch.float, device=device)
+
+        img = FeatureImageTorch.from_torch(data, feature_keys)
+        img.stamp = read_timestamp_file(base_dir, idx)
+        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return img
 
     def to(self, device):
         self.device = device
         self.image = self.image.to(device)
         return self
     
+    def rand_init(device='cpu'):
+        image = torch.randn(64, 32, 5, device=device)
+        fks = FeatureKeyList(
+            label=[f'feat_{i}' for i in range(5)],
+            metainfo=['rand'] * 5
+        )
+
+        out = FeatureImageTorch.from_torch(image, fks)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+
+        return out
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if self.feature_keys != other.feature_keys:
+            return False
+
+        if not torch.allclose(self.image, other.image):
+            return False
+
+        return True        
+
     def __repr__(self):
         return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)

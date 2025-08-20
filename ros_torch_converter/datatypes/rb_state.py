@@ -2,7 +2,10 @@ import os
 import torch
 import numpy as np
 
+from scipy.spatial.transform import Rotation as R
+
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from nav_msgs.msg import Odometry
 
@@ -88,6 +91,10 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         """
         note that some dtypes  should be stored as rows of a matrix
         """
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_frame_file(base_dir, idx, 'child_frame_id', self.child_frame_id)
+
         save_fp = os.path.join(base_dir, "data.txt")
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1, 13])
@@ -106,16 +113,46 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
-        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
+        state = np.loadtxt(fp).reshape(-1, 13)[idx]
+        state = torch.tensor(state, dtype=torch.float, device=device)
 
-        state = np.loadtxt(fp)[idx]
-        ts = np.loadtxt(timestamp_fp)[idx]
+        child_frame_id = read_frame_file(base_dir, idx, 'child_frame_id')
 
-        odom = OdomRBStateTorch(device=device)
-        odom.state = torch.tensor(state, device=device).float()
-        odom.stamp = ts
+        rbst = OdomRBStateTorch.from_torch(state, child_frame_id)
 
-        return odom
+        rbst.stamp = read_timestamp_file(base_dir, idx)
+        rbst.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return rbst
+
+    def rand_init(device='cpu'):
+        x = torch.rand(13)
+
+        angs = np.random.rand(3) * 2*np.pi
+        q = R.from_euler('xyz', angs).as_quat()
+        q = torch.tensor(q, dtype=torch.float, device=device)
+        x[3:7] = q
+
+        rbst = OdomRBStateTorch.from_torch(x, 'random_child')
+        rbst.frame_id = 'random'
+        rbst.stamp = np.random.rand()
+
+        return rbst
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if self.child_frame_id != other.child_frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.state, other.state):
+            return False
+
+        return True
 
     def __repr__(self):
         return "OdomRBStateTorch from {} to {} with x:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.child_frame_id, self.state.cpu().numpy().round(4), self.stamp, self.device)

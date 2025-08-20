@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from sensor_msgs.msg import CameraInfo
 
@@ -54,6 +55,9 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         return msg
 
     def to_kitti(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         np.savetxt(save_fp, self.intrinsics.cpu().numpy().flatten())
 
@@ -64,6 +68,8 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         data = np.loadtxt(fp).reshape(3, 3)
 
         res.intrinsics = torch.tensor(data).float().to(device)
+        res.stamp = read_timestamp_file(base_dir, idx)
+        res.frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
         return res
 
@@ -72,6 +78,27 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
         self.intrinsics = self.intrinsics.to(device)
         return self
     
+    def rand_init(device='cpu'):
+        data = torch.eye(3, device=device)
+        data[[0, 1, 0, 1], [0, 1, 2, 2]] = torch.rand(size=(4, )) * 100.
+
+        out = IntrinsicsTorch.from_torch(data)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+
+        return out
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.intrinsics, other.intrinsics):
+            return False
+
+        return True
 
     def __repr__(self):
         return "IntrinsicsTorch with k:\n{}, device = {}".format(self.intrinsics.cpu().numpy().round(4), self.device)

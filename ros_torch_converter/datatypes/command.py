@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from geometry_msgs.msg import TwistStamped
 
@@ -59,6 +60,9 @@ class CommandTorch(TorchCoordinatorDataType):
         """
         note that some dtypes  should be stored as rows of a matrix
         """
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         save_fp = os.path.join(base_dir, "data.txt")
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1, 2])
@@ -75,8 +79,37 @@ class CommandTorch(TorchCoordinatorDataType):
 
         np.savetxt(save_fp, data)
 
-    def from_kitti(self, base_dir, idx, device='cpu'):
-        pass
+    def from_kitti(base_dir, idx, device='cpu'):
+        save_fp = os.path.join(base_dir, "data.txt")
+
+        data = np.loadtxt(save_fp).reshape(-1, 2)[idx]
+
+        out = CommandTorch(device=device)
+        out.state = torch.tensor(data, device=device).float()
+
+        out.stamp = read_timestamp_file(base_dir, idx)
+        out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return out
+
+    def rand_init(device='cpu'):
+        out = CommandTorch(device)
+        out.state = torch.rand(2, device=device)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+        return out
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.state, other.state):
+            return False
+
+        return True
 
     def __repr__(self):
         return "CommandTorch from {} with x:\n{} (time = {:.2f}, device = {})".format(self.frame_id, self.state.cpu().numpy().round(4), self.stamp, self.device)

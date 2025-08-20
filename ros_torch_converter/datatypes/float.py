@@ -3,6 +3,7 @@ import torch
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from std_msgs.msg import Float32
 
@@ -37,6 +38,9 @@ class Float32Torch(TorchCoordinatorDataType):
         """
         note that some dtypes  should be stored as rows of a matrix
         """
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         save_fp = os.path.join(base_dir, "data.txt")
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1])
@@ -55,16 +59,36 @@ class Float32Torch(TorchCoordinatorDataType):
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
-        timestamp_fp = os.path.join(base_dir, "timestamps.txt")
 
-        data = np.loadtxt(fp)[idx]
-        ts = np.loadtxt(timestamp_fp)[idx]
+        data = np.loadtxt(fp).reshape(-1)[idx]
 
         out = Float32Torch(device=device)
         out.data = torch.tensor(data, device=device).float()
-        out.stamp = ts
+
+        out.stamp = read_timestamp_file(base_dir, idx)
+        out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
         return out
+
+    def rand_init(device='cpu'):
+        out = Float32Torch(device=device)
+        out.data = torch.rand(size=(), device=device)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+
+        return out
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if not torch.allclose(self.data, other.data):
+            return False
+
+        return True
 
     def __repr__(self):
         return "Float32Torch with data {:.2f}, device {}".format(self.data.item(), self.device)

@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
@@ -257,6 +258,9 @@ class BEVGridTorch(TorchCoordinatorDataType):
         return gridmap_msg
 
     def to_kitti(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+
         data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
@@ -297,13 +301,36 @@ class BEVGridTorch(TorchCoordinatorDataType):
             feature_keys = feature_keys,
             device=device
         )
-        
+
         data = np.load(data_fp)
         bev_grid.data = torch.tensor(data, dtype=torch.float, device=device)
         
-        gt = BEVGridTorch.from_bev_grid(bev_grid)
-        return gt
+        bgt = BEVGridTorch.from_bev_grid(bev_grid)
+        bgt.stamp = read_timestamp_file(base_dir, idx)
+        bgt.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        return bgt
     
+    def rand_init():
+        bev_grid = BEVGrid.random_init()
+
+        bgt = BEVGridTorch.from_bev_grid(bev_grid)
+        bgt.frame_id = 'random'
+        bgt.stamp = np.random.rand()
+        
+        return bgt
+
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if self.bev_grid != other.bev_grid:
+            return False
+
+        return True
+
     def to(self, device):
         self.device = device
         self.bev_grid = self.bev_grid.to(device)
