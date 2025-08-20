@@ -66,6 +66,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_plot', action='store_true', help='set this flag to not display the plot')
     parser.add_argument('--force', action='store_true', help='dont ask to overwrite')
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
+    parser.add_argument('--no_skip', action='store_true', help='Do not skip data which is not present in the bag')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -77,6 +78,12 @@ if __name__ == '__main__':
     target_topics = [x['topic'] for x in config['topics']]
     topic_to_msgtype = {x['topic']:x['type'] for x in config['topics']}
     topic_to_name = {x['topic']:x['name'] for x in config['topics']}
+    topic_to_skip_tf = {}
+    for topic in config['topics']:
+        skip_tf = False
+        if 'no_tf' in topic['args']:
+            skip_tf = topic['args']['no_tf']
+        topic_to_skip_tf[topic['topic']] = skip_tf
 
     bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
 
@@ -88,28 +95,35 @@ if __name__ == '__main__':
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
 
+    # Present topics/frames in bag
+    present_topics = set()
     frame_list = set()
 
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
 
-        assert check_connections(connections, target_topics), "missing topics"
+        assert not args.no_skip or check_connections(connections, target_topics), "missing topics"
 
         queue = setup_queue(reader, config)
 
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
+            present_topics.add(topic)
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
-                frame_list.add(msg.header.frame_id)
+                if msg_time == 0.0:
+                    msg_time = timestamp * 1e-9
+                if not topic_to_skip_tf[topic]:
+                    frame_list.add(msg.header.frame_id)
             else:
                 msg_time = timestamp * 1e-9
 
             if hasattr(msg, "child_frame_id"):
-                frame_list.add(msg.child_frame_id)
+                if not topic_to_skip_tf[topic]:
+                    frame_list.add(msg.child_frame_id)
 
             tdiffs = queue['target_times'] - msg_time
 
@@ -120,6 +134,21 @@ if __name__ == '__main__':
 
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
+
+    # update target topics given what is present
+    present_topics = list(present_topics)
+    new_target_topics = []
+    skipped_topics = []
+    for cfg in config['topics']:
+        topic = cfg['topic']
+        if topic in present_topics:
+            new_target_topics.append(topic)
+        else:
+            # remove from queue
+            skipped_topics.append(topic)
+            del queue['topic_error'][topic]
+            del queue['topic_times'][topic]
+    target_topics = new_target_topics
 
     #update the tf tree
     frame_list = list(frame_list)
@@ -169,9 +198,8 @@ if __name__ == '__main__':
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
-    for topic_config in config['topics']:
-        topic = topic_config['topic']
-        topic_dir = os.path.join(args.dst_dir, topic_config['name'])
+    for topic in target_topics:
+        topic_dir = os.path.join(args.dst_dir, topic_to_name[topic])
         os.makedirs(topic_dir, exist_ok=True)
 
         np.savetxt(os.path.join(topic_dir, 'timestamps.txt'), queue['topic_times'][topic])
@@ -228,6 +256,8 @@ if __name__ == '__main__':
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
+                if msg_time == 0.0:
+                    msg_time = timestamp * 1e-9
             else:
                 msg_time = timestamp * 1e-9
                 
@@ -236,7 +266,7 @@ if __name__ == '__main__':
 
             if len(idxs) > 0:
 #                print('topic {} msg for frames {}'.format(topic, idxs))
-                print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
+                print('proc idx {}/{}'.format(idxs[0].item(), n_frames))
                 checks[topic].append(idxs)
 
                 torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
@@ -254,4 +284,7 @@ if __name__ == '__main__':
     for topic, idxs in checks.items():
         valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
         print('{} has all frames: {}'.format(topic, valid))
-
+    if skipped_topics != []:
+        print('\nSkipped the following topics:')
+        for topic in skipped_topics:
+            print(topic)

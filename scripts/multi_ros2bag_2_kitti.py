@@ -50,7 +50,7 @@ if __name__ == '__main__':
 
     print('can extract data for {}/{} rosbag dirs'.format(len(success_dirs), len(rosbag_dirs)))
 
-    base_cmd = "python3 ros2bag_2_kitti.py --config {} --src_dir {} --dst_dir {} --force"
+    base_cmd = "python3 ros2bag_2_kitti.py --config {} --src_dir {} --dst_dir {} --force --no_plot"
 
     success_proc_dirs = []
     fail_proc_dirs = []
