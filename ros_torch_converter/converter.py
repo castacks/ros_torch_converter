@@ -23,9 +23,8 @@ str_to_cvt_class = {
     "Command": CommandTorch,
     "Image": ImageTorch,
     "FeatureImage": FeatureImageTorch,
-    #skipping thermal pending a discussion on whether they should be merged into base image
-    # "ThermalImage": ThermalImageTorch,
-    # "Thermal16bitImage": Thermal16bitImageTorch,
+    "ThermalImage": ThermalImageTorch,
+    "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
     "PointCloud": PointCloudTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,

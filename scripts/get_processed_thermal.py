@@ -47,7 +47,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--img_dir', type=str, required=True, help='/path/to/16bit/thermal/images')
     parser.add_argument('--dst_dir', type=str, default=None, help='/path/to/output/8bit/thermal/images')
-    parser.add_argument('--process', type=str, default='firestereo', help='minmax or firestereo')
+    parser.add_argument('--process', type=str, default=None, help='minmax or firestereo')
     parser.add_argument('--rectify', action='store_true', help='rectify image')
     parser.add_argument('--enhance', action='store_true', help='enhance image')
     args = parser.parse_args()
@@ -67,7 +67,10 @@ if __name__ == '__main__':
 
     for image in tqdm(images):
         img = cv2.imread(os.path.join(args.img_dir, image), cv2.IMREAD_UNCHANGED)
-        img_out = process_image(img, args.process)
+        if args.process is not None:
+            img_out = process_image(img, args.process)
+        else:
+            img_out = img
         if args.rectify:
             img_out = rectify_image(img_out, intrinsics, distortion)
         if args.enhance:
