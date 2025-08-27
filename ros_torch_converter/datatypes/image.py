@@ -268,9 +268,8 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
          Convert 16-bit raw image to ROS message
          '''
          img = (self.image).cpu().numpy().astype(np.uint16)
-         # Remove channel dimension if single channel for ROS message
-        #  if img.shape[-1] == 1:
-        #      img = img.squeeze(-1)
+         if img.shape[-1] == 1:
+             img = img.squeeze(-1)
          if compressed:
              img_msg = self.bridge.cv2_to_compressed_imgmsg(img, encoding=encoding)
          else:
