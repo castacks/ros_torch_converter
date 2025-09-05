@@ -322,6 +322,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     def to(self, device):
         self.device=device
         self.pts = self.pts.to(device)
+        self.feat_mask = self.feat_mask.to(device)
         self.features = self.features.to(device)
         return self
     
