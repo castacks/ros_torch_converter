@@ -175,6 +175,13 @@ class TfTree:
                 out += self._repr_helper(node.frame_id, depth+1)
         return out
 
+    def has_frame(self, x):
+        if x in self.nodes.keys():
+            return True
+        
+        parent_frames = {node.parent_frame_id for node in self.nodes.values()}
+        return x in parent_frames
+
 class TfManager:
     """
     Class that enables tf stuff for offline proc
@@ -373,6 +380,8 @@ class TfManager:
         """
         tmin = -float('inf')
         tmax = float('inf')
+
+        frame_list = [x for x in frame_list if self.tf_tree.has_frame(x)]
 
         for frame in frame_list:
             _tmin, _tmax = self.get_valid_times(frame, frame_list[0])

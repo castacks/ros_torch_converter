@@ -17,6 +17,12 @@
       max_age: 1.
       args: {}
 
+    - name: gps_odom
+      topic: /odometry/filtered_odom
+      type: OdomRBState
+      max_age: 1.
+      args: {}
+
     - name: image_intrinsics
       topic: /multisense/left/image_rect_color/camera_info
       type: Intrinsics
