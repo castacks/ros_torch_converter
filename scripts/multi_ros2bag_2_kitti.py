@@ -46,6 +46,7 @@ if __name__ == '__main__':
             success_dirs.append(dst_path)
             success_rosbag_dirs.append(rosbag_dir)
         else:
+            print(f"uh oh the script failed for {rosbag_dir}!")
             fail_dirs.append(dst_path)
 
     print('can extract data for {}/{} rosbag dirs'.format(len(success_dirs), len(rosbag_dirs)))
@@ -64,6 +65,7 @@ if __name__ == '__main__':
         if res.returncode == 0:
             success_proc_dirs.append(dst_path)
         else:
+            print(f"uh oh the script failed for {rosbag_dir}!")
             fail_proc_dirs.append(dst_path)
 
     print('successfully extracted data for {}/{} proc dirs'.format(len(success_proc_dirs), len(success_dirs)))
