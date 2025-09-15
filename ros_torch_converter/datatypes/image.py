@@ -81,13 +81,15 @@ class ImageTorch(TorchCoordinatorDataType):
 
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = (self.image * 255.).long().cpu().numpy().astype(np.uint8)
-        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        # img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(save_fp, img)
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = ImageTorch(device=device)
-        img.image = torch.tensor(cv2.cvtColor(cv2.imread(fp), cv2.COLOR_BGR2RGB), device=device).float() / 255.
+        img_data = cv2.imread(fp)
+        # img_data = cv2.CvtColor(img_data, cv2.COLOR_BGR2RGB)
+        img.image = torch.tensor(img_data, device=device).float() / 255.
 
         img.stamp = read_timestamp_file(base_dir, idx)
         img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
