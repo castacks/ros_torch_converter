@@ -124,6 +124,19 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         rbst.frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
         return rbst
+    
+    def from_kitti_multi(base_dir, idxs, device='cpu'):
+        fp = os.path.join(base_dir, "data.txt")
+        states = np.loadtxt(fp).reshape(-1, 13)[idxs]
+        states = torch.tensor(states, dtype=torch.float, device=device)
+
+        stamps = read_timestamp_file(base_dir, idxs)
+        frame_id = read_frame_file(base_dir, idxs[0], 'frame_id')
+        child_frame_id = read_frame_file(base_dir, idxs[0], 'child_frame_id')
+
+        rbsts = [OdomRBStateTorch.from_torch(state, child_frame_id) for state in states]
+
+        return rbsts
 
     def rand_init(device='cpu'):
         x = torch.rand(13)
