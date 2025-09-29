@@ -32,7 +32,7 @@ str_to_cvt_class = {
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
-    "VoxelGridTorch": VoxelGridTorch
+    "VoxelGrid": VoxelGridTorch
 }
 
 class ROSTorchConverter(Node):

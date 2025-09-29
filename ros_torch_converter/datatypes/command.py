@@ -91,6 +91,18 @@ class CommandTorch(TorchCoordinatorDataType):
         out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
         return out
+    
+    def from_kitti_multi(base_dir, idxs, device='cpu'):
+        save_fp = os.path.join(base_dir, "data.txt")
+
+        data = np.loadtxt(save_fp).reshape(-1, 2)[idxs]
+        data = torch.tensor(data, device=device).float()
+        stamps = read_timestamp_file(base_dir, idxs)
+        frame_id = read_frame_file(base_dir, idxs[0], 'frame_id')
+
+        out = [CommandTorch.from_kitti(x) for x in data]
+
+        return out
 
     def rand_init(device='cpu'):
         out = CommandTorch(device)

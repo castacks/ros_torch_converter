@@ -19,6 +19,11 @@ class Float32Torch(TorchCoordinatorDataType):
         self.data = torch.zeros(1, device=device)
         self.device = device
     
+    def from_torch(x):
+        out = Float32Torch(device=x.device)
+        out.data = x
+        return out
+
     def from_rosmsg(msg, device='cpu'):
         res = Float32Torch(device=device)
         res.data = torch.tensor([msg.data], device=device)
@@ -67,6 +72,18 @@ class Float32Torch(TorchCoordinatorDataType):
 
         out.stamp = read_timestamp_file(base_dir, idx)
         out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+
+        return out
+    
+    def from_kitti_multi(base_dir, idxs, device='cpu'):
+        fp = os.path.join(base_dir, "data.txt")
+
+        data = np.loadtxt(fp).reshape(-1)[idxs]
+        data = torch.tensor(data, device=device).float()
+        stamps = read_timestamp_file(base_dir, idxs)
+        frame_ids = read_frame_file(base_dir, idxs, 'frame_id')
+
+        out = [Float32Torch.from_torch(x) for x in data]
 
         return out
 
