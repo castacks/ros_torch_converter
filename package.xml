@@ -13,7 +13,6 @@
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>core_interfaces</exec_depend>
   <exec_depend>perception_interfaces</exec_depend>
-  <exec_depend>physics_atv_visual_mapping</exec_depend>
   <exec_depend>tartandriver_utils</exec_depend>
   
   <test_depend>ament_copyright</test_depend>
