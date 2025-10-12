@@ -4,7 +4,7 @@ set -Eeuo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  extract_all_rosbags.sh -r <SRC_ROOT> -d <DST_ROOT> [options]
+  multirosbag_2_kitty.sh -r <SRC_ROOT> -d <DST_ROOT> [options]
 
 Required:
   -r, --root PATH          Source dataset root to scan recursively
