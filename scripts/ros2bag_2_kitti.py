@@ -1,6 +1,7 @@
 import os
 import yaml
 import argparse
+from typing import Sequence, List, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,6 +16,13 @@ from tartandriver_utils.ros_utils import stamp_to_time
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
 
+import logging
+
+RED = "\033[31m"
+RESET = "\033[0m"
+
+logging.basicConfig(level=logging.INFO)
+
 """
 Script to create kitti-formatted datasets from ros2 bags
 General algo is something like this:
@@ -22,14 +30,79 @@ General algo is something like this:
     2. Then do another pass through to actually convert messages, etc
 """
 
-def setup_queue(reader, config):
+def max_dt_subset(times: Sequence[float], dt: float) -> Tuple[List[int], np.ndarray]:
+    """
+    Pick the largest subset with gaps >= dt, and FORCE-include the first element.
+    Assumes `times` are in nondecreasing chronological order.
+
+    Returns:
+        indices: list of selected indices into `times`
+        values:  numpy array of selected times
+    """
+    t = np.asarray(times, dtype=float)
+    if t.size == 0:
+        return [], t
+
+    sel = [0]                    # must include the first element
+    last = t[0]
+
+    for i in range(1, t.size):
+        if t[i] - last >= dt:
+            sel.append(i)
+            last = t[i]
+
+    return sel, t[sel]
+
+
+def extract_timestamp(msg,bag_timestamp,use_bag_time):
+    if hasattr(msg, "header") and not use_bag_time:
+        msg_time = stamp_to_time(msg.header.stamp)
+    else:
+        msg_time = bag_timestamp * 1e-9
+    return msg_time
+
+def setup_queue(reader, config, connections=None):
     """
     Initialize message queues based on config
     """
-    start_time = reader.start_time * 1e-9
-    end_time = reader.end_time * 1e-9
 
-    target_times = np.arange(start_time, end_time, config['dt'])
+    start_time = float('inf')
+    end_time = -float('inf')
+    start_topic = ""
+    end_topic = ""
+
+    if "master_topic" in config.keys():
+        master_topic = config['master_topic']
+        master_conns = [x for x in connections if x.topic == master_topic]
+        assert len(master_conns) > 0, "master topic not found in bag!"
+        print("Using {} as master topic".format(master_topic))
+        connections = master_conns
+        master_times = []
+
+
+    for connection, timestamp, rawdata in reader.messages(connections=connections):
+
+        msg = reader.deserialize(rawdata, connection.msgtype)
+        msg_time = extract_timestamp(msg, timestamp, args.use_bag_time)
+        if msg_time < start_time:
+            start_time = msg_time
+            start_topic = connection.topic
+        if msg_time > end_time:
+            end_time = msg_time 
+            end_topic = connection.topic
+        
+        if "master_topic" in config.keys():
+            if connection.topic == master_topic:
+                master_times.append(msg_time)
+    
+    print("Correct start time: ", start_time , "bag start time: ", reader.start_time * 1e-9)
+    print("Correct end time: ", end_time , "bag end time: ", reader.end_time * 1e-9)
+    print("Start topic: ", start_topic)
+    print("End topic: ", end_topic)
+
+    # target_times = np.arange(start_time, end_time, config['dt'])
+
+    target_times = max_dt_subset(master_times, config['dt'])[1]
 
     queue = {
         'target_times': target_times,
@@ -96,7 +169,7 @@ if __name__ == '__main__':
 
         assert check_connections(connections, target_topics), "missing topics"
 
-        queue = setup_queue(reader, config)
+        queue = setup_queue(reader, config,connections=connections)
 
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
@@ -117,6 +190,10 @@ if __name__ == '__main__':
 
             if not config['backward_interpolation']:
                 better_mask = better_mask & (tdiffs >= 0.)
+            elif config['backward_interpolation_only']:
+                assert config['backward_interpolation'] == True , "set backward_interpolation to True if backward_interpolation_only is True"
+                better_mask = better_mask & (tdiffs <= 0.)
+            
 
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
@@ -138,8 +215,8 @@ if __name__ == '__main__':
         print('no calib file provided. Note that for Yamaha data this is probably wrong!')
 
     print('handling tf...')
-    tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
-
+    # tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+    tf_manager = TfManager(device='cuda')
     if has_calib_file:
         tf_manager.update_from_calib_config(calib_config)
 
@@ -154,7 +231,6 @@ if __name__ == '__main__':
     for topic, times in queue['topic_times'].items():
         all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
 
-    assert all_valid_mask.any(), "topics not sync'ed!"
 
     queue['target_times'] = queue['target_times'][all_valid_mask]
 
@@ -163,6 +239,11 @@ if __name__ == '__main__':
         queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
     print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+    if all_valid_mask.sum() == 0:
+        logging.info(f"{RED}No valid frames found! Try increasing interp_tol or adjusting dt{RESET}")
+
+        exit(0)
+    # assert all_valid_mask.any(), "topics not sync'ed!"
     n_frames = all_valid_mask.shape[0]
 
     os.makedirs(args.dst_dir, exist_ok=True)

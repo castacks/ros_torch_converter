@@ -1,0 +1,89 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.032
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: true
+
+  backward_interpolation_only: true
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/tartan_rgbt/handheld.yaml
+  master_topic: /zed/zed_node/left/image_rect_color
+  # PARV_TODO - add Imu data extraction also
+  topics:
+    - name : zed_left_rect
+      topic: /zed/zed_node/left/image_rect_color
+      type: Image
+      max_age: 1.
+      args: {}
+    
+    - name : zed_right_rect
+      topic: /zed/zed_node/right/image_rect_color
+      type: Image
+      max_age: 1.
+      args: {}
+
+    - name: thermal_right_rect_16
+      topic: /thermal_right/image_rect
+      type: Thermal16bitImage
+      max_age: 1.
+      args: {}
+
+
+    - name: thermal_left_rect_16
+      topic: /thermal_left/image_rect
+      type: Thermal16bitImage
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_left_ffc
+      topic: /thermal_left/ffc_status
+      type: Bool
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_right_ffc
+      topic: /thermal_right/ffc_status
+      type: Bool
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_left_rect_8
+      topic: /thermal_left/image_processed
+      type: Image
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_right_rect_8
+      topic: /thermal_right/image_processed
+      type: Image
+      max_age: 1.
+      args: {}
+
+    # - name: thermal_left_intrinsics
+    #   topic: /thermal_left/camera_info
+    #   type: Intrinsics
+    #   max_age: 1.
+    #   args: {}
+    # - name: thermal_right_intrinsics
+    #   topic: /thermal_right/camera_info
+    #   type: Intrinsics
+    #   max_age: 1.
+    #   args: {}
+
+    # - name: zed_left_intrinsics
+    #   topic: /zed/zed_node/left/camera_info
+    #   type: Intrinsics
+    #   max_age: 1.
+    #   args: {}
+    
+    # - name: zed_right_intrinsics
+    #   topic: /zed/zed_node/right/camera_info
+    #   type: Intrinsics
+    #   max_age: 1.
+    #   args: {}
+    
+
