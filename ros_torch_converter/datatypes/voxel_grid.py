@@ -119,7 +119,8 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             'resolution': self.voxel_grid.metadata.resolution.tolist(),
         }
 
-        yaml.dump(metadata, open(metadata_fp, 'w'))
+        with open(metadata_fp, 'w') as f:
+            yaml.dump(metadata, f)
 
         data = {
             'raster_indices': self.voxel_grid.raster_indices.cpu().numpy(),

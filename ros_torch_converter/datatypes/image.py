@@ -418,7 +418,8 @@ class FeatureImageTorch(TorchCoordinatorDataType):
             ]
         }
 
-        yaml.dump(metadata, open(metadata_fp, 'w'), default_flow_style=False)
+        with open(metadata_fp, 'w') as f:
+            yaml.dump(metadata, f, default_flow_style=False)
 
         data = self.image.cpu().numpy()
         np.save(data_fp, data)

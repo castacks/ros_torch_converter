@@ -287,7 +287,8 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
             ]
         }
 
-        yaml.dump(metadata, open(metadata_fp, 'w'))
+        with open(metadata_fp, 'w') as f:
+            yaml.dump(metadata, f)
 
         data = {
             'pts': self.pts.cpu().numpy(),
