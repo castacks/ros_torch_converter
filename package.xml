@@ -11,8 +11,6 @@
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>torch</exec_depend>
   <exec_depend>ros2launch</exec_depend>
-  <exec_depend>core_interfaces</exec_depend>
-  <exec_depend>perception_interfaces</exec_depend>
   <exec_depend>tartandriver_utils</exec_depend>
   
   <test_depend>ament_copyright</test_depend>

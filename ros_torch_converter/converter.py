@@ -4,16 +4,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
-# from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.command import CommandTorch
-from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch, Thermal16bitImageTorch, Float32bitImageTorch
+from ros_torch_converter.datatypes.image import ImageTorch, ThermalImageTorch, Thermal16bitImageTorch, Float32bitImageTorch
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
 from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
-# from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.bool import BoolTorch
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -23,7 +21,6 @@ str_to_cvt_class = {
     "Float32": Float32Torch,
     "Command": CommandTorch,
     "Image": ImageTorch,
-    "FeatureImage": FeatureImageTorch,
     #skipping thermal pending a discussion on whether they should be merged into base image
     "ThermalImage": ThermalImageTorch,
     "Thermal16bitImage": Thermal16bitImageTorch,
@@ -36,7 +33,6 @@ str_to_cvt_class = {
     "GoalArray": GoalArrayTorch,
     "Bool": BoolTorch,
     "Float32Torch": Float32bitImageTorch,
-    # "VoxelGridTorch": VoxelGridTorch
 }
 
 class ROSTorchConverter(Node):

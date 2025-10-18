@@ -11,7 +11,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
-from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
+from ros_torch_converter.datatypes.feature_key_list import FeatureKeyList
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
