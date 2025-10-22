@@ -1,27 +1,43 @@
 import copy
 
-import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.command import CommandTorch
-from ros_torch_converter.datatypes.image import ImageTorch, FeatureImageTorch, ThermalImageTorch, Thermal16bitImageTorch
+from ros_torch_converter.datatypes.image import (
+    ImageTorch,
+    CompressedImageTorch,
+    FeatureImageTorch,
+    ThermalImageTorch,
+    Thermal16bitImageTorch,
+)
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
-from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePointCloudTorch
+from ros_torch_converter.datatypes.pointcloud import (
+    PointCloudTorch,
+    FeaturePointCloudTorch,
+)
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
+from ros_torch_converter.datatypes.sensor_msgs import (
+    ImuTorch,
+    NavSatFixTorch,
+    PoseWithCovarianceStampedTorch,
+    TwistStampedTorch,
+)
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
 str_to_cvt_class = {
     "BEVGrid": BEVGridTorch,
+    "GridMap": BEVGridTorch,  # GridMap is handled by BEVGridTorch
     "Float32": Float32Torch,
     "Command": CommandTorch,
     "Image": ImageTorch,
+    "CompressedImage": CompressedImageTorch,
     "FeatureImage": FeatureImageTorch,
     "ThermalImage": ThermalImageTorch,
     "Thermal16bitImage": Thermal16bitImageTorch,
@@ -32,8 +48,13 @@ str_to_cvt_class = {
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
-    "VoxelGrid": VoxelGridTorch
+    "VoxelGrid": VoxelGridTorch,
+    "Imu": ImuTorch,
+    "NavSatFix": NavSatFixTorch,
+    "PoseWithCovarianceStamped": PoseWithCovarianceStampedTorch,
+    "TwistStamped": TwistStampedTorch,
 }
+
 
 class ROSTorchConverter(Node):
     """Top-level class that manages conversion from ROS->torch.
@@ -46,7 +67,7 @@ class ROSTorchConverter(Node):
         super().__init__(name + "_ros_torch_converter_node")
 
         self.config = config
-        self.device = self.config['device']
+        self.device = self.config["device"]
         self.subscribers = {}
         self.converters = {}
 
@@ -60,7 +81,7 @@ class ROSTorchConverter(Node):
         self.get_logger().info("cvt node ready")
 
     def setup_subscribers(self):
-        #TODO: Setup an option using message_filters.TimeSynchronizer
+        # TODO: Setup an option using message_filters.TimeSynchronizer
         for topic_conf in self.config["topics"]:
             self.data[topic_conf["name"]] = None
             self.data_times[topic_conf["name"]] = -1.0
@@ -109,7 +130,7 @@ class ROSTorchConverter(Node):
             topic_name = topic_config["name"]
             data_time = self.data_times[topic_name]
 
-            if curr_time - data_time > max_age or data_time < 0.:
+            if curr_time - data_time > max_age or data_time < 0.0:
                 return False
 
         return True
@@ -118,7 +139,6 @@ class ROSTorchConverter(Node):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
         out = "\n ---converter status--- \n"
         for topic_conf in self.config["topics"]:
-
             data_exists = self.data[topic_conf["name"]] is not None
             data_age = curr_time - self.data_times[topic_conf["name"]]
             out += "\t{:<16} exists: {} age:{:.2f}s\n".format(

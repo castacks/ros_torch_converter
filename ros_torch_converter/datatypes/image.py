@@ -127,6 +127,106 @@ class ImageTorch(TorchCoordinatorDataType):
     def __repr__(self):
         return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
 
+class CompressedImageTorch(ImageTorch):
+    """
+    TorchCoordinator class for compressed images.
+    Inherits from ImageTorch and handles CompressedImage messages.
+    """
+    from_rosmsg_type = CompressedImage
+
+    def from_rosmsg(msg, device="cpu", camera_info=None, rectify=False):
+        """
+        Convert CompressedImage message to ImageTorch.
+
+        Args:
+            msg: CompressedImage message
+            device: torch device
+            camera_info: Optional CameraInfo message for rectification
+            rectify: If True and camera_info is provided, rectify the image
+        """
+        res = CompressedImageTorch(device)
+        # Decode compressed image using cv2
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+
+        if img is None:
+            raise ValueError("Failed to decode compressed image")
+
+        # Rectify image if camera_info is provided and rectify is True
+        if rectify and camera_info is not None:
+            img = CompressedImageTorch._rectify_image(img, camera_info)
+
+        if img.ndim == 3:  # Color image
+            img = img[..., :3]
+        # For grayscale, do nothing
+        img = torch.from_numpy(img / 255.0).float().to(device)
+        res.image = img
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    @staticmethod
+    def _rectify_image(img, camera_info):
+        """
+        Rectify/undistort an image using camera calibration parameters.
+        Supports both standard (plumb_bob/radtan) and fisheye (equidistant) distortion models.
+
+        Args:
+            img: OpenCV image (numpy array)
+            camera_info: CameraInfo message with calibration data
+
+        Returns:
+            Rectified image (numpy array)
+        """
+        # Extract camera matrix and distortion coefficients
+        K = np.array(camera_info.k).reshape(3, 3)
+        D = np.array(camera_info.d)
+
+        # Check if there's actually distortion to correct
+        if len(D) == 0 or np.allclose(D, 0):
+            # No distortion, return original image
+            return img
+
+        # Get image dimensions
+        h, w = img.shape[:2]
+
+        # Use rectification matrix R if available, otherwise use identity
+        if len(camera_info.r) > 0 and not np.allclose(camera_info.r, 0):
+            R = np.array(camera_info.r).reshape(3, 3)
+        else:
+            R = np.eye(3)
+
+        # Use projection matrix P if available, otherwise use K
+        if len(camera_info.p) > 0 and not np.allclose(camera_info.p, 0):
+            P = np.array(camera_info.p).reshape(3, 4)
+            new_K = P[:3, :3]
+        else:
+            new_K = K
+
+        # Check distortion model and use appropriate undistortion method
+        distortion_model = getattr(camera_info, 'distortion_model', 'plumb_bob')
+        
+        if distortion_model == 'equidistant' or distortion_model == 'fisheye':
+            # Use fisheye camera model for equidistant/fisheye distortion
+            # OpenCV fisheye expects distortion vector, ensure it's the right shape
+            D_fisheye = D[:4] if len(D) >= 4 else np.pad(D, (0, 4 - len(D)), 'constant')
+            
+            # Compute fisheye undistortion maps
+            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                K, D_fisheye, R, new_K, (w, h), cv2.CV_32FC1
+            )
+        else:
+            # Use standard distortion model (plumb_bob, rational_polynomial, etc.)
+            map1, map2 = cv2.initUndistortRectifyMap(
+                K, D, R, new_K, (w, h), cv2.CV_32FC1
+            )
+
+        # Apply undistortion
+        rectified_img = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+
+        return rectified_img
+
+
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for images

@@ -2,7 +2,6 @@ import os
 import yaml
 import array
 import torch
-import rosbags
 import warnings
 import ros2_numpy
 import numpy as np
@@ -58,6 +57,8 @@ class PointCloudTorch(TorchCoordinatorDataType):
         pcl_np = ros2_numpy.numpify(msg)
         xyz = pcl_np['xyz']
 
+        # Copy the array to ensure strides are compatible with PyTorch
+        xyz = np.array(xyz, copy=True)
         res.pts = torch.tensor(xyz).float().to(res.device)
 
         res.stamp = stamp_to_time(msg.header.stamp)

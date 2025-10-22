@@ -1,0 +1,290 @@
+---
+dt: 0.1
+
+#allow interpolation up to this many seconds
+interp_tol: 0.5
+
+#set to true to allow past target times to be filled by future data
+backward_interpolation: false
+
+#overrride tfs with values from config (STRONGLY RECOMMEND USING)
+# calib_file: /path/to/your/calibration.yaml
+
+topics:
+  # Odometry sources
+  - name: dlio_odometry
+    topic: /boxi/dlio/lidar_map_odometry
+    type: OdomRBState
+    max_age: 1.0
+    args: {}
+
+  # - name: inertial_explorer_tc_odometry
+  #   topic: /boxi/inertial_explorer/tc/odometry
+  #   type: OdomRBState
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: inertial_explorer_rt_odometry
+  #   topic: /boxi/inertial_explorer/rt/odometry
+  #   type: OdomRBState
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_odometry
+  #   topic: /anymal/state_estimator/odometry
+  #   type: OdomRBState
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_pose
+  #   topic: /anymal/state_estimator/pose
+  #   type: PoseWithCovarianceStamped
+  #   max_age: 1.0
+  #   args: {}
+
+  # LiDAR point clouds
+  # - name: hesai_points
+  #   topic: /boxi/hesai/points
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: hesai_points_undistorted
+  #   topic: /boxi/hesai/points_undistorted
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: livox_points
+  #   topic: /boxi/livox/points
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: livox_points_undistorted
+  #   topic: /boxi/livox/points_undistorted
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_velodyne_points
+  #   topic: /anymal/velodyne/points
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_velodyne_points_undistorted
+  #   topic: /anymal/velodyne/points_undistorted
+  #   type: PointCloud
+  #   max_age: 1.0
+  #   args: {}
+
+  - name: dlio_hesai_points_undistorted
+    topic: /boxi/dlio/hesai_points_undistorted
+    type: PointCloud
+    max_age: 1.0
+    args: {}
+
+  # Alphasense camera images (5 cameras)
+  - name: alphasense_front_center_image
+    topic: /boxi/alphasense/front_center/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_front_center_camera_info
+    topic: /boxi/alphasense/front_center/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_front_left_image
+    topic: /boxi/alphasense/front_left/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_front_left_camera_info
+    topic: /boxi/alphasense/front_left/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_front_right_image
+    topic: /boxi/alphasense/front_right/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_front_right_camera_info
+    topic: /boxi/alphasense/front_right/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_left_image
+    topic: /boxi/alphasense/left/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_left_camera_info
+    topic: /boxi/alphasense/left/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_right_image
+    topic: /boxi/alphasense/right/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: alphasense_right_camera_info
+    topic: /boxi/alphasense/right/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  # HDR cameras (3 cameras)
+  - name: hdr_front_image
+    topic: /boxi/hdr/front/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: hdr_front_camera_info
+    topic: /boxi/hdr/front/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: hdr_left_image
+    topic: /boxi/hdr/left/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: hdr_left_camera_info
+    topic: /boxi/hdr/left/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  - name: hdr_right_image
+    topic: /boxi/hdr/right/image_raw/compressed
+    type: CompressedImage
+    max_age: 1.0
+    args: {}
+
+  - name: hdr_right_camera_info
+    topic: /boxi/hdr/right/camera_info
+    type: Intrinsics
+    max_age: 1.0
+    args: {}
+
+  # # ZED2i stereo camera
+  # - name: zed2i_left_image
+  #   topic: /boxi/zed2i/left/image_raw/compressed
+  #   type: CompressedImage
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: zed2i_left_camera_info
+  #   topic: /boxi/zed2i/left/camera_info
+  #   type: Intrinsics
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: zed2i_right_image
+  #   topic: /boxi/zed2i/right/image_raw/compressed
+  #   type: CompressedImage
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: zed2i_right_camera_info
+  #   topic: /boxi/zed2i/right/camera_info
+  #   type: Intrinsics
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: zed2i_depth
+  #   topic: /boxi/zed2i/depth/image_raw/compressed
+  #   type: CompressedImage
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: zed2i_depth_camera_info
+  #   topic: /boxi/zed2i/depth/camera_info
+  #   type: Intrinsics
+  #   max_age: 1.0
+  #   args: {}
+
+  # # IMU data
+  # - name: alphasense_imu
+  #   topic: /boxi/alphasense/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: cpt7_imu
+  #   topic: /boxi/cpt7/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: stim320_imu
+  #   topic: /boxi/stim320/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: livox_imu
+  #   topic: /boxi/livox/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: adis_imu
+  #   topic: /boxi/adis/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: ap20_imu
+  #   topic: /boxi/ap20/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_imu
+  #   topic: /anymal/imu
+  #   type: Imu
+  #   max_age: 1.0
+  #   args: {}
+
+  # GPS/GNSS data
+  - name: inertial_explorer_tc_navsatfix
+    topic: /boxi/inertial_explorer/tc/navsatfix
+    type: NavSatFix
+    max_age: 1.0
+    args: {}
+
+  - name: inertial_explorer_rt_navsatfix
+    topic: /boxi/inertial_explorer/rt/navsatfix
+    type: NavSatFix
+    max_age: 1.0
+    args: {}
+
+  # # AnyMal specific data
+  # - name: anymal_twist_command
+  #   topic: /anymal/twist_command
+  #   type: TwistStamped
+  #   max_age: 1.0
+  #   args: {}
+
+  # - name: anymal_elevation_map
+  #   topic: /anymal/elevation_mapping/elevation_map_raw
+  #   type: GridMap
+  #   max_age: 1.0
+  #   args: {}
