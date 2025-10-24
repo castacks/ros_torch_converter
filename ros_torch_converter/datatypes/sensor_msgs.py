@@ -214,7 +214,7 @@ class NavSatFixTorch(TorchCoordinatorDataType):
         return res
 
 
-class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
+class PoseWithCovarianceTorch(TorchCoordinatorDataType):
     """TorchCoordinator class for PoseWithCovarianceStamped messages"""
 
     from_rosmsg_type = PoseWithCovarianceStamped
@@ -229,7 +229,7 @@ class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
         self.frame_id = ""
 
     def from_rosmsg(msg, device="cpu"):
-        res = PoseWithCovarianceStampedTorch(device)
+        res = PoseWithCovarianceTorch(device)
         res.position = torch.tensor(
             [
                 msg.pose.pose.position.x,
@@ -265,7 +265,7 @@ class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
         fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = torch.tensor(np.loadtxt(fp), device=device, dtype=torch.float32)
 
-        res = PoseWithCovarianceStampedTorch(device=device)
+        res = PoseWithCovarianceTorch(device=device)
         res.position = data[:3]
         res.orientation = data[3:7]
         res.stamp = read_timestamp_file(base_dir, idx)
@@ -292,7 +292,7 @@ class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
         return self
 
     def __eq__(self, other):
-        if not isinstance(other, PoseWithCovarianceStampedTorch):
+        if not isinstance(other, PoseWithCovarianceTorch):
             return False
         if abs(self.stamp - other.stamp) > 1e-8:
             return False
@@ -303,7 +303,7 @@ class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
         )
 
     def rand_init(device="cpu"):
-        res = PoseWithCovarianceStampedTorch(device=device)
+        res = PoseWithCovarianceTorch(device=device)
         res.position = torch.randn(3, device=device)
         res.orientation = torch.randn(4, device=device)
         res.orientation = res.orientation / torch.norm(res.orientation)  # normalize
@@ -312,7 +312,7 @@ class PoseWithCovarianceStampedTorch(TorchCoordinatorDataType):
         return res
 
 
-class TwistStampedTorch(TorchCoordinatorDataType):
+class TwistTorch(TorchCoordinatorDataType):
     """TorchCoordinator class for TwistStamped messages"""
 
     from_rosmsg_type = TwistStamped
@@ -327,7 +327,7 @@ class TwistStampedTorch(TorchCoordinatorDataType):
         self.frame_id = ""
 
     def from_rosmsg(msg, device="cpu"):
-        res = TwistStampedTorch(device)
+        res = TwistTorch(device)
         res.linear = torch.tensor(
             [msg.twist.linear.x, msg.twist.linear.y, msg.twist.linear.z],
             device=device,
@@ -354,7 +354,7 @@ class TwistStampedTorch(TorchCoordinatorDataType):
         fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = torch.tensor(np.loadtxt(fp), device=device, dtype=torch.float32)
 
-        res = TwistStampedTorch(device=device)
+        res = TwistTorch(device=device)
         res.linear = data[:3]
         res.angular = data[3:6]
         res.stamp = read_timestamp_file(base_dir, idx)
@@ -380,7 +380,7 @@ class TwistStampedTorch(TorchCoordinatorDataType):
         return self
 
     def __eq__(self, other):
-        if not isinstance(other, TwistStampedTorch):
+        if not isinstance(other, TwistTorch):
             return False
         if abs(self.stamp - other.stamp) > 1e-8:
             return False
@@ -391,7 +391,7 @@ class TwistStampedTorch(TorchCoordinatorDataType):
         )
 
     def rand_init(device="cpu"):
-        res = TwistStampedTorch(device=device)
+        res = TwistTorch(device=device)
         res.linear = torch.randn(3, device=device)
         res.angular = torch.randn(3, device=device)
         res.stamp = np.random.rand()

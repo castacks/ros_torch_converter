@@ -13,7 +13,7 @@ from ros_torch_converter.datatypes.image import (
     ThermalImageTorch,
     Thermal16bitImageTorch,
 )
-from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch
+from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch, CameraInfoTorch
 from ros_torch_converter.datatypes.pointcloud import (
     PointCloudTorch,
     FeaturePointCloudTorch,
@@ -25,8 +25,8 @@ from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.sensor_msgs import (
     ImuTorch,
     NavSatFixTorch,
-    PoseWithCovarianceStampedTorch,
-    TwistStampedTorch,
+    PoseWithCovarianceTorch,
+    TwistTorch,
 )
 
 from tartandriver_utils.ros_utils import stamp_to_time
@@ -42,6 +42,7 @@ str_to_cvt_class = {
     "ThermalImage": ThermalImageTorch,
     "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
+    "CameraInfo": CameraInfoTorch,
     "PointCloud": PointCloudTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
     "Transform": TransformTorch,
@@ -51,8 +52,8 @@ str_to_cvt_class = {
     "VoxelGrid": VoxelGridTorch,
     "Imu": ImuTorch,
     "NavSatFix": NavSatFixTorch,
-    "PoseWithCovarianceStamped": PoseWithCovarianceStampedTorch,
-    "TwistStamped": TwistStampedTorch,
+    "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
+    "TwistStamped": TwistTorch,
 }
 
 

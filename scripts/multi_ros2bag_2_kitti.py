@@ -14,6 +14,7 @@ if __name__ == '__main__':
     parser.add_argument('--dst_dir', type=str, required=True, help='base dir of save')
     parser.add_argument('--config_fp', type=str, required=True, help='path to save config')
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing')
+    parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info')
     args = parser.parse_args()
 
     rosbag_dirs = []
@@ -29,6 +30,8 @@ if __name__ == '__main__':
     base_cmd = "python3 ros2bag_2_kitti.py --config {} --src_dir {} --dst_dir {} --dryrun --no_plot --force"
     if args.skip_tf:
         base_cmd += " --skip_tf"
+    if args.rectify:
+        base_cmd += " --rectify"
     # base_cmd = "ls {}" #if theres a bug in the second part of the script this serves as a cache
 
     success_rosbag_dirs = []
@@ -57,6 +60,8 @@ if __name__ == '__main__':
     base_cmd = "python3 ros2bag_2_kitti.py --config {} --src_dir {} --dst_dir {} --force"
     if args.skip_tf:
         base_cmd += " --skip_tf"
+    if args.rectify:
+        base_cmd += " --rectify"
 
     success_proc_dirs = []
     fail_proc_dirs = []
