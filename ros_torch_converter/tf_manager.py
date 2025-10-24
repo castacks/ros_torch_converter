@@ -332,7 +332,10 @@ class TfManager:
                             'times': np.zeros(0)
                         }
                     else:
-                        assert src_frame == frames[dst_frame]['parent_frame_id'], "TfManager does not currently support rewiring the tf tree"
+                        # Skip transforms that try to rewire the tf tree
+                        if src_frame != frames[dst_frame]['parent_frame_id']:
+                            print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[dst_frame]['parent_frame_id']}->{dst_frame})")
+                            continue
 
                     if dt > 0. and len(frames[dst_frame]['times']) > 0:
                         if t - frames[dst_frame]['times'][-1] < dt:
