@@ -63,9 +63,23 @@ class ImageTorch(TorchCoordinatorDataType):
         img_msg.header.frame_id = self.frame_id
         return img_msg
     
-    def from_rosmsg(msg, device='cpu'):
+    def from_rosmsg(msg, device='cpu', camera_info_torch=None, rectify=False):
+        """
+        Convert ROS Image message to ImageTorch.
+        
+        Args:
+            msg: ROS Image message
+            device: torch device
+            camera_info_torch: Optional CameraInfoTorch object for rectification
+            rectify: If True and camera_info_torch is provided, rectify the image
+        """
         res = ImageTorch(device)
         img = res.bridge.imgmsg_to_cv2(msg)
+        
+        # Rectify image if requested and camera_info is provided
+        if rectify and camera_info_torch is not None:
+            img = ImageTorch._rectify_image(img, camera_info_torch)
+        
         if img.ndim == 3:  # Color image
             img = img[..., :3]
         # For grayscale, do nothing
@@ -126,6 +140,151 @@ class ImageTorch(TorchCoordinatorDataType):
     
     def __repr__(self):
         return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
+
+    @staticmethod
+    def _rectify_image(img, camera_info_torch):
+        """
+        Rectify/undistort an image using camera calibration parameters.
+        Supports both standard (plumb_bob/radtan) and fisheye (equidistant) distortion models.
+
+        Args:
+            img: OpenCV image (numpy array)
+            camera_info_torch: CameraInfoTorch object with calibration data
+
+        Returns:
+            Rectified image (numpy array)
+        """
+        # Extract camera parameters from CameraInfoTorch
+        K = camera_info_torch.k.cpu().numpy()
+        D = camera_info_torch.d.cpu().numpy()
+        R = camera_info_torch.r.cpu().numpy()
+        P = camera_info_torch.p.cpu().numpy()
+        
+        # Check if there's actually distortion to correct
+        if len(D) == 0 or np.allclose(D, 0):
+            # No distortion, return original image
+            return img
+
+        # Get image dimensions
+        h, w = img.shape[:2]
+
+        # Use P matrix for new camera matrix
+        new_K = P[:3, :3]
+
+        # Check distortion model and use appropriate undistortion method
+        distortion_model = camera_info_torch.distortion_model
+        
+        if distortion_model == 'equidistant' or distortion_model == 'fisheye':
+            # Use fisheye camera model for equidistant/fisheye distortion
+            # OpenCV fisheye expects distortion vector, ensure it's the right shape
+            D_fisheye = D[:4] if len(D) >= 4 else np.pad(D, (0, 4 - len(D)), 'constant')
+            
+            # Compute fisheye undistortion maps
+            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                K, D_fisheye, R, new_K, (w, h), cv2.CV_32FC1
+            )
+        else:
+            # Use standard distortion model (plumb_bob, rational_polynomial, etc.)
+            map1, map2 = cv2.initUndistortRectifyMap(
+                K, D, R, new_K, (w, h), cv2.CV_32FC1
+            )
+
+        # Apply undistortion
+        rectified_img = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+
+        return rectified_img
+
+class CompressedImageTorch(ImageTorch):
+    """
+    TorchCoordinator class for compressed images.
+    Inherits from ImageTorch and handles CompressedImage messages.
+    """
+    from_rosmsg_type = CompressedImage
+
+    def from_rosmsg(msg, device="cpu", camera_info_torch=None, rectify=False):
+        """
+        Convert CompressedImage message to ImageTorch.
+
+        Args:
+            msg: CompressedImage message
+            device: torch device
+            camera_info_torch: Optional CameraInfoTorch object for rectification
+            rectify: If True and camera_info_torch is provided, rectify the image
+        """
+        res = CompressedImageTorch(device)
+        # Decode compressed image using cv2
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        img = cv2.imdecode(np_arr, cv2.IMREAD_UNCHANGED)
+
+        if img is None:
+            raise ValueError("Failed to decode compressed image")
+
+        # Rectify image if camera_info_torch is provided and rectify is True
+        if rectify and camera_info_torch is not None:
+            img = CompressedImageTorch._rectify_image(img, camera_info_torch)
+
+        if img.ndim == 3:  # Color image
+            img = img[..., :3]
+        # For grayscale, do nothing
+        img = torch.from_numpy(img / 255.0).float().to(device)
+        res.image = img
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    @staticmethod
+    def _rectify_image(img, camera_info_torch):
+        """
+        Rectify/undistort an image using camera calibration parameters.
+        Supports both standard (plumb_bob/radtan) and fisheye (equidistant) distortion models.
+
+        Args:
+            img: OpenCV image (numpy array)
+            camera_info_torch: CameraInfoTorch object with calibration data
+
+        Returns:
+            Rectified image (numpy array)
+        """
+        # Extract camera parameters from CameraInfoTorch
+        K = camera_info_torch.k.cpu().numpy()
+        D = camera_info_torch.d.cpu().numpy()
+        R = camera_info_torch.r.cpu().numpy()
+        P = camera_info_torch.p.cpu().numpy()
+
+        # Check if there's actually distortion to correct
+        if len(D) == 0 or np.allclose(D, 0):
+            # No distortion, return original image
+            return img
+
+        # Get image dimensions
+        h, w = img.shape[:2]
+
+        # Use P matrix for new camera matrix
+        new_K = P[:3, :3]
+
+        # Check distortion model and use appropriate undistortion method
+        distortion_model = camera_info_torch.distortion_model
+        
+        if distortion_model == 'equidistant' or distortion_model == 'fisheye':
+            # Use fisheye camera model for equidistant/fisheye distortion
+            # OpenCV fisheye expects distortion vector, ensure it's the right shape
+            D_fisheye = D[:4] if len(D) >= 4 else np.pad(D, (0, 4 - len(D)), 'constant')
+            
+            # Compute fisheye undistortion maps
+            map1, map2 = cv2.fisheye.initUndistortRectifyMap(
+                K, D_fisheye, R, new_K, (w, h), cv2.CV_32FC1
+            )
+        else:
+            # Use standard distortion model (plumb_bob, rational_polynomial, etc.)
+            map1, map2 = cv2.initUndistortRectifyMap(
+                K, D, R, new_K, (w, h), cv2.CV_32FC1
+            )
+
+        # Apply undistortion
+        rectified_img = cv2.remap(img, map1, map2, cv2.INTER_LINEAR)
+
+        return rectified_img
+
 
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
