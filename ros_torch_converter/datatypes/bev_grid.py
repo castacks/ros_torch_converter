@@ -94,7 +94,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         return res
 
-    def to_rosmsg(self, viz_features=True, viz_layers=['dino_0', 'dino_1', 'dino_2']):
+    def to_rosmsg(self, viz_features=True, viz_layers=['c-radio_v3-b_siglip2_0', 'c-radio_v3-b_siglip2_1', 'c-radio_v3-b_siglip2_2']):
         gridmap_msg = GridMap()
 
         gridmap_data = self.bev_grid.data.cpu().numpy()
