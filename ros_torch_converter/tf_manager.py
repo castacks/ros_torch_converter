@@ -207,6 +207,10 @@ class TfManager:
                 if not tf_node.is_static:
                     print('tf {}->{} is not static. Skipping...'.format(src_frame, dst_frame))
                     continue
+                    # print('tf {}->{} is not static. Overriding with calibration...'.format(src_frame, dst_frame))
+                    # # Force override dynamic TF with static calibration to handle old thermal
+                    # transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
+                    # res = self.add_static_tf(src_frame, dst_frame, transform)
 
                 if tf_node.parent_frame_id != src_frame and tf_node.parent_frame_id != "/ROOT":
                     print('got tf {}->{} in calib, but is {}->{} in data. Skipping...'.format(src_frame, dst_frame, tf_node.parent_frame_id, dst_frame))
@@ -257,7 +261,8 @@ class TfManager:
                 np.savetxt(os.path.join(save_fp, "timestamps.txt"), node.times)
                 np.savetxt(os.path.join(save_fp, "transforms.txt"), node.transforms)
 
-        yaml.dump(metadata, open(os.path.join(base_dir, "metadata.yaml"), 'w'))
+        with open(os.path.join(base_dir, "metadata.yaml"), 'w') as f:
+            yaml.dump(metadata, f)
 
     def from_kitti(run_dir, device='cpu'):
         tf_manager = TfManager(device)

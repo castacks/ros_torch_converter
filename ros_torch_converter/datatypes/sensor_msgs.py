@@ -66,18 +66,35 @@ class ImuTorch(TorchCoordinatorDataType):
         return res
 
     def to_kitti(self, base_dir, idx):
+        """
+        Save IMU data in a single data.txt file (like odometry)
+        Each row: [qx, qy, qz, qw, wx, wy, wz, ax, ay, az] orientation, angular, linear
+        """
         update_timestamp_file(base_dir, idx, self.stamp)
         update_frame_file(base_dir, idx, "frame_id", self.frame_id)
 
-        save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
-        data = torch.cat(
+        save_fp = os.path.join(base_dir, "data.txt")
+        if not os.path.exists(save_fp):
+            data = float('inf') * np.ones([idx+1, 10])
+        else:
+            data = np.loadtxt(save_fp).reshape(-1, 10)
+
+        if data.shape[0] < (idx+1):
+            data_new = float('inf') * np.ones([idx+1, 10])
+            data_new[:data.shape[0]] = data
+            data = data_new
+
+        imu_data = torch.cat(
             [self.orientation, self.angular_velocity, self.linear_acceleration]
         )
-        np.savetxt(save_fp, data.cpu().numpy())
+        data[idx] = imu_data.cpu().numpy()
+
+        np.savetxt(save_fp, data)
 
     def from_kitti(base_dir, idx, device="cpu"):
-        fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
-        data = torch.tensor(np.loadtxt(fp), device=device, dtype=torch.float32)
+        fp = os.path.join(base_dir, "data.txt")
+        data = np.loadtxt(fp).reshape(-1, 10)[idx]
+        data = torch.tensor(data, device=device, dtype=torch.float32)
 
         res = ImuTorch(device=device)
         res.orientation = data[:4]

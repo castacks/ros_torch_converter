@@ -2,7 +2,7 @@
   dt: 0.1
 
   #allow interpolation up to this many seconds
-  interp_tol: 0.5
+  interp_tol: 0.2
 
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
@@ -10,30 +10,36 @@
   calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml
 
   topics:
-    # - name: odometry
-    #   topic: /superodometry/integrated_to_init #namespaced in new bags
-    #   type: OdomRBState
-    #   args: {}
+    - name: odometry
+      topic: /superodometry/integrated_to_init #namespaced in new bags
+      type: OdomRBState
+      args: {}
 
-    # - name: gps_odometry
-    #   topic: /odometry/filtered_odom
-    #   type: OdomRBState
-    #   args: {}
+    - name: gps_odometry
+      topic: /odometry/filtered_odom
+      type: OdomRBState
+      args: {}
 
-    # - name: multisense_left_intrinsics
-    #   topic: /multisense/left/image_rect_color/camera_info
-    #   type: Intrinsics
-    #   args: {}
+    - name: multisense_left_intrinsics
+      topic: /multisense/left/image_rect_color/camera_info
+      type: Intrinsics
+      args: {}
 
-    # - name: image_left_color
-    #   topic: /multisense/left/image_rect_color
-    #   type: Image
-    #   args: {}
+    - name: image
+      topic: /multisense/left/image_rect_color
+      type: Image
+      args: {}
+    
+    - name: thermal_left
+      topic: /thermal_left/image
+      type: Thermal16bitImage
+      max_age: 1.
+      args: {}
 
-    # - name: roughness
-    #   topic: /traversability_cost
-    #   type: Float32
-    #   args: {}
+    - name: roughness
+      topic: /traversability_cost
+      type: Float32
+      args: {}
 
     - name: pointcloud_in_odom
       topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
