@@ -43,17 +43,31 @@ if __name__ == '__main__':
 
 The ROS-Torch converter requires a config yaml (example in `configs/costmap_speedmap.yaml`) that specifies the topics to listen to and how to convert.
 
-Example for extracting kitti format data from rosbag:
+Extract kitti format data from rosbag:
 ```
 python3 scripts/ros2bag_2_kitti.py --config config/kitti_config/super_odometry_sensors.yaml --src_dir [mcap_dir] --dst_dir [output_dir]
 ```
 
-Example for exporting full scene reconstruction from SLAM to PCD:
+Export full scene reconstruction from SLAM to PCD:
 ```
 python3 scripts/slam_2_pcd.py --config config/kitti_config/slam_2_pcd.yaml
 ```
 
-More details on [Slite](https://airlab.slite.com/app/docs/FAtc3skQoXn3r_)
+Post-process SLAM dataset (depth, camera poses):
+```
+python3 scripts/get_slam_data.py --dataset [dataset_dir] --config config/kitti_config/get_slam_data_rgb.yaml #_thermal
+```
+- run with `--idx [idx] --debug` for single frame debug and viz
+- `--resume` to resume from last processed frame
+- `--seq_to [idx]` to process a specific sequence
+
+Post-process thermal data (rectify, process):
+```
+python3 scripts/get_thermal_data.py --dataset [dataset_dir] --config config/kitti_config/get_thermal_data.yaml
+```
+- run this if your bag doesn't already have _rect or _processed thermal topics 
+
+More details on [Slite](https://airlab.slite.com/app/docs/FAtc3skQoXn3r_).
 
 ## Testing
 When you make changes to the datatypes, make sure this test passes:

@@ -70,6 +70,18 @@
       type: ThermalImage
       max_age: 1.
       args: {}
+    
+    - name: thermal_left_ffc
+      topic: /thermal_left/ffc_status
+      type: FFCStatus
+      max_age: 1.
+      args: {}
+  
+    - name: thermal_right_ffc
+      topic: /thermal_right/ffc_status
+      type: FFCStatus
+      max_age: 1.
+      args: {}
 
     - name: novatel_imu
       topic: /novatel/imu/data

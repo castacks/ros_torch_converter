@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+from std_msgs.msg import Bool
 
 from sensor_msgs.msg import Imu, NavSatFix
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
@@ -414,3 +415,74 @@ class TwistTorch(TorchCoordinatorDataType):
         res.stamp = np.random.rand()
         res.frame_id = "random"
         return res
+
+class FFCStatusTorch:
+    from_rosmsg_type = Bool
+
+    def __init__(self, status, stamp, frame_id):
+        self.status = status
+        self.stamp = stamp
+        self.frame_id = frame_id
+
+    @classmethod
+    def from_rosmsg(cls, msg, device="cpu", **kwargs):
+        if hasattr(msg, "header"):
+            stamp = stamp_to_time(msg.header.stamp)
+            frame_id = msg.header.frame_id
+        else:
+            stamp = 0.0
+            frame_id = ""
+
+        status = 1 if msg.data else 0
+
+        return cls(status, stamp, frame_id)
+
+    @classmethod
+    def from_kitti(cls, base_dir, idx, device="cpu"):
+        data_file = os.path.join(base_dir, "data.txt")
+        if os.path.exists(data_file):
+            data = np.loadtxt(data_file)
+            if data.ndim == 0:
+                data = np.array([data])
+            status = int(data[idx]) if idx < len(data) else -1
+        else:
+            status = -1
+        
+        timestamp_file = os.path.join(base_dir, "timestamps.txt")
+        if os.path.exists(timestamp_file):
+            timestamps = np.loadtxt(timestamp_file)
+            if timestamps.ndim == 0:
+                timestamps = np.array([timestamps])
+            stamp = timestamps[idx] if idx < len(timestamps) else 0.0
+        else:
+            stamp = 0.0
+
+        return cls(status, stamp, "")
+
+    def to_kitti(self, base_dir, idx):
+        os.makedirs(base_dir, exist_ok=True)
+        
+        data_file = os.path.join(base_dir, "data.txt")
+        
+        if os.path.exists(data_file):
+            data = np.loadtxt(data_file)
+            if data.ndim == 0:
+                data = np.array([data])
+            data = data.tolist()
+        else:
+            data = []
+        
+        while len(data) <= idx:
+            data.append(-1)
+        
+        data[idx] = self.status
+        
+        np.savetxt(data_file, np.array(data), fmt='%d')
+
+    def to_rosmsg(self):
+        msg = Bool()
+        msg.data = bool(self.status)
+        return msg
+
+    def __repr__(self):
+        return f"FFCStatusTorch(status={self.status}, stamp={self.stamp:.3f})"

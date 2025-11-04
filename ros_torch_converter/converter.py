@@ -28,6 +28,7 @@ from ros_torch_converter.datatypes.sensor_msgs import (
     NavSatFixTorch,
     PoseWithCovarianceTorch,
     TwistTorch,
+    FFCStatusTorch,
 )
 
 from tartandriver_utils.ros_utils import stamp_to_time
@@ -55,6 +56,7 @@ str_to_cvt_class = {
     "NavSatFix": NavSatFixTorch,
     "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
     "TwistStamped": TwistTorch,
+    "FFCStatus": FFCStatusTorch,
 }
 
 

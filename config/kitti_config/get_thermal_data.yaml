@@ -1,0 +1,32 @@
+left_dir: thermal_left
+right_dir: thermal_right
+output_suffix: processed #rect
+rectify: True
+process: firestereo_v2
+enhance: True
+calib:
+  cam0:
+    cam_overlaps: [1]
+    camera_model: pinhole
+    distortion_coeffs: [-0.367732796157476, 0.12110213142717571, -0.0006255396681117811, 0.00041510869260370575]
+    distortion_model: radtan
+    intrinsics: [412.42744451663316, 412.6067309651629, 313.3864399260144, 249.37501762553134]
+    resolution: [640, 512]
+    rostopic: /thermal_left/image
+  cam1:
+    T_cn_cnm1:
+    - [0.9999479408726121, 0.0008798101125090356, 0.010165701096644357, -0.33505628508675633]
+    - [-0.0008448068478612056, 0.9999937020460125, -0.003447052320188868, -0.0015400531367783638]
+    - [-0.01016866982501626, 0.003438284815753268, 0.9999423865160997, 0.005949248275516332]
+    - [0.0, 0.0, 0.0, 1.0]
+    cam_overlaps: [0]
+    camera_model: pinhole
+    distortion_coeffs: [-0.3646254664102374, 0.1158259212097221, -9.092342333844295e-05, 0.00036734337646596486]
+    distortion_model: radtan
+    intrinsics: [411.4854983000627, 412.3174770716144, 311.13432233740434, 250.07332554923977]
+    resolution: [640, 512]
+    rostopic: /thermal_right/image
+  baseline: 0.33505628508675633
+  extrinsics: #velodyne1 to thermal_left
+    p: [ 0.19265, -0.15227,  0.05708]
+    q: [ 0.5574714, -0.54525728,  0.44844936,  0.43682184]
