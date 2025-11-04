@@ -1,0 +1,84 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.2
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  topics:
+    - name: odometry
+      topic: /superodometry/integrated_to_init #namespaced in new bags
+      type: OdomRBState
+      max_age: 1.
+      args: {}
+
+    - name: image_intrinsics
+      topic: /multisense/left/image_rect_color/camera_info
+      type: Intrinsics
+      max_age: 1.
+      args: {}
+
+    - name: image_left_rect_color
+      topic: /multisense/left/image_rect_color
+      type: Image
+      max_age: 1.
+      args: {}
+
+    - name: image_left_rect
+      topic: /multisense/left/image_rect
+      type: Image
+      max_age: 1.
+      args: {}
+
+    - name: image_right_rect
+      topic: /multisense/right/image_rect
+      type: Image
+      max_age: 1.
+      args: {}
+
+    - name: pointcloud_in_odom
+      topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
+      type: PointCloud
+      max_age: 1.
+      args: {}
+
+    - name: thermal_left
+      topic: /thermal_left/image
+      type: Thermal16bitImage
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_right
+      topic: /thermal_right/image
+      type: Thermal16bitImage
+      max_age: 1.
+      args: {}
+
+    - name: thermal_left_processed
+      topic: /thermal_left/image_processed
+      type: ThermalImage
+      max_age: 1.
+      args: {}
+    
+    - name: thermal_right_processed
+      topic: /thermal_right/image_processed
+      type: ThermalImage
+      max_age: 1.
+      args: {}
+
+    - name: novatel_imu
+      topic: /novatel/imu/data
+      type: Imu
+      max_age: 1.0
+      args: {}
+    
+    # - name: pcl
+    #   topic: /velodyne_1/velodyne_points
+    #   type: PointCloud
+    #   max_age: 1.
+    #   args: {}
