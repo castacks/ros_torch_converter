@@ -4,8 +4,8 @@ import numpy as np
 
 from scipy.spatial.transform import Rotation as R
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from nav_msgs.msg import Odometry
 
@@ -16,7 +16,8 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
-    
+    time_spec = TimeSpec.INTERP
+
     def __init__(self, device='cpu'):
         super().__init__()
         self.child_frame_id = ""
@@ -88,14 +89,19 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         return self
 
     def to_kitti(self, base_dir, idx):
-        """
-        note that some dtypes  should be stored as rows of a matrix
-        """
-        update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-        update_frame_file(base_dir, idx, 'child_frame_id', self.child_frame_id)
+        update_timestamp_file(base_dir, idx, self.stamp, file='timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'child_frame_id', self.child_frame_id)
+        self.save_to_file(base_dir, idx, file='data.txt')
 
-        save_fp = os.path.join(base_dir, "data.txt")
+    def to_kitti_interp(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'child_frame_id', self.child_frame_id)
+        self.save_to_file(base_dir, idx, file='interp_data.txt')
+
+    def save_to_file(self, base_dir, idx, file='data.txt'):
+        save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1, 13])
         else:
@@ -116,12 +122,12 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         state = np.loadtxt(fp).reshape(-1, 13)[idx]
         state = torch.tensor(state, dtype=torch.float, device=device)
 
-        child_frame_id = read_frame_file(base_dir, idx, 'child_frame_id')
+        child_frame_id = read_info_file(base_dir, 'child_frame_id')
 
         rbst = OdomRBStateTorch.from_torch(state, child_frame_id)
 
         rbst.stamp = read_timestamp_file(base_dir, idx)
-        rbst.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        rbst.frame_id = read_info_file(base_dir, 'frame_id')
 
         return rbst
     
@@ -131,8 +137,8 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         states = torch.tensor(states, dtype=torch.float, device=device)
 
         stamps = read_timestamp_file(base_dir, idxs)
-        frame_id = read_frame_file(base_dir, idxs[0], 'frame_id')
-        child_frame_id = read_frame_file(base_dir, idxs[0], 'child_frame_id')
+        frame_id = read_info_file(base_dir, 'frame_id')
+        child_frame_id = read_info_file(base_dir, 'child_frame_id')
 
         rbsts = [OdomRBStateTorch.from_torch(state, child_frame_id) for state in states]
 

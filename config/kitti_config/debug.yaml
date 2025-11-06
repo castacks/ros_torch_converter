@@ -7,48 +7,41 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
-  data:
-    - name: odom
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  topics:
+    - name: super_odometry
       topic: /superodometry/integrated_to_init #namespaced in new bags
       type: OdomRBState
+      max_age: 1.
       args: {}
 
-    - name: gps_odom
-      topic: /odometry/filtered_odom
-      type: OdomRBState
-      args: {}
-
-    - name: multisense_left_intrinsics
-      topic: /multisense/left/image_rect_color/camera_info
-      type: Intrinsics
-      args: {}
-
-    - name: image_left_color
-      topic: /multisense/left/image_rect_color
-      type: Image
-      args: {}
-
-    - name: pcl
-      topic: /velodyne_1/velodyne_points
-      type: PointCloud
-      args: {}
-
-    - name: super_odometry_pc
+    - name: super_odometry_point_cloud
       topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
       type: PointCloud
+      max_age: 1.
       args: {}
 
-    - name: local_navmap
-      topic: /local_navmap
-      type: BEVGrid
+    - name: gps_odometry
+      topic: /odometry/filtered_odom
+      type: OdomRBState
+      max_age: 1.
+      args: {}
+
+    - name: multisense_left_image_rect_color
+      topic: /multisense/left/image_rect_color
+      type: Image
+      max_age: 1.
+      args: {}
+
+    - name: multisense_left_camera_info
+      topic: /multisense/left/image_rect_color/camera_info
+      type: CameraInfo
+      max_age: 1.
       args: {}
 
     - name: steer_angle
       topic: /talon/current_position
       type: Float32
-      args: {}
-
-    - name: goals
-      topic: /next_waypoints/odom
-      type: GoalArray
       args: {}

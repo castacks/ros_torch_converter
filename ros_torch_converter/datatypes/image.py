@@ -14,8 +14,8 @@ from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 class ImageTorch(TorchCoordinatorDataType):
     """
@@ -25,6 +25,7 @@ class ImageTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = Image
     from_rosmsg_type = Image
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -91,7 +92,7 @@ class ImageTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):        
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = (self.image * 255.).long().cpu().numpy().astype(np.uint8)
@@ -106,7 +107,7 @@ class ImageTorch(TorchCoordinatorDataType):
         img.image = torch.tensor(img_data, device=device).float() / 255.
 
         img.stamp = read_timestamp_file(base_dir, idx)
-        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        img.frame_id = read_info_file(base_dir,  'frame_id')
         return img
 
     def rand_init(device='cpu'):
@@ -294,6 +295,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = Image
     from_rosmsg_type = Image
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -347,7 +349,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
         
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
         img = (self.image * 255.).long().cpu().numpy().astype(np.uint8)
@@ -362,7 +364,7 @@ class ThermalImageTorch(TorchCoordinatorDataType):
         img.image = torch.tensor(img_np, dtype=torch.float32, device=device) / 255.
         
         img.stamp = read_timestamp_file(base_dir, idx)
-        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        img.frame_id = read_info_file(base_dir,  'frame_id')
         return img
 
     def to(self, device):
@@ -397,119 +399,116 @@ class ThermalImageTorch(TorchCoordinatorDataType):
         return "ThermalImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
 
 class Thermal16bitImageTorch(TorchCoordinatorDataType):
-     """
-     Specifically for 16-bit [0-65535] raw thermal data.
-     Do not change to 8-bit [0-255] range.
-     """
-     to_rosmsg_type = Image
-     from_rosmsg_type = Image
+    """
+    Specifically for 16-bit [0-65535] raw thermal data.
+    Do not change to 8-bit [0-255] range.
+    """
+    to_rosmsg_type = Image
+    from_rosmsg_type = Image
+    time_spec = TimeSpec.SYNC
  
-     def __init__(self, device):
-         super().__init__()
-         self.image = torch.zeros(0,0,1, device=device)
-         self.feature_keys = FeatureKeyList(
-             label=['radiation'],
-             metainfo=['16bit']
-         )
-         self.bridge = cv_bridge.CvBridge()
-         self.device = device
- 
-     def from_torch(image):
-         res = Thermal16bitImageTorch(device=image.device)
-         res.image = image.float()
-         return res
- 
-     def from_numpy(image, device):
-         res = Thermal16bitImageTorch(device=device)
-         res.image = torch.tensor(image, dtype=torch.float32, device=device)
-         return res   
- 
-     def to_rosmsg(self, encoding='passthrough', compressed=False):
-         '''
-         Convert 16-bit raw image to ROS message
-         '''
-         img = (self.image).cpu().numpy().astype(np.uint16)
-         if img.shape[-1] == 1:
-             img = img.squeeze(-1)
-         if compressed:
-             img_msg = self.bridge.cv2_to_compressed_imgmsg(img, encoding=encoding)
-         else:
-             img_msg = self.bridge.cv2_to_imgmsg(img, encoding=encoding)
- 
-         img_msg.header.stamp = time_to_stamp(self.stamp)
-         img_msg.header.frame_id = self.frame_id
-         return img_msg
-     
-     def from_rosmsg(msg, device='cpu'):
-         '''Read 16-bit raw image from ROS message. Return as torch tensor. Single channel.'''
-         res = Thermal16bitImageTorch(device)
-         img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
-         if img.ndim == 2:
-             img = img[..., np.newaxis]
-         elif img.ndim == 3:
-             img = img[..., :1]
-         img = torch.from_numpy(img.astype(np.float32)).to(device)
-         res.image = img
-         res.stamp = stamp_to_time(msg.header.stamp)
-         res.frame_id = msg.header.frame_id
-         return res
- 
-     def to_kitti(self, base_dir, idx):
-         '''Save 16-bit raw image'''
-         update_timestamp_file(base_dir, idx, self.stamp)
-         update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-         
-         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
-         if self.image.device.type != 'cpu':
-             img_np = self.image.cpu().numpy().astype(np.uint16)
-         else:
-             img_np = self.image.numpy().astype(np.uint16)
-         # Remove channel dimension for saving
-         if img_np.shape[-1] == 1:
-             img_np = img_np.squeeze(-1)
-         cv2.imwrite(save_fp, img_np, [cv2.IMWRITE_PNG_COMPRESSION, 0])
- 
-     def from_kitti(base_dir, idx, device='cpu'):
-         fp = os.path.join(base_dir, "{:08d}.png".format(idx))
-         img = Thermal16bitImageTorch(device=device)
-         img_np = cv2.imread(fp, cv2.IMREAD_UNCHANGED)
-         if img_np.ndim == 2:
-             img_np = img_np[..., np.newaxis]
-         img.image = torch.tensor(img_np, dtype=torch.float32, device=device)
-         
-         img.stamp = read_timestamp_file(base_dir, idx)
-         img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
-         return img
- 
-     def to(self, device):
-         self.device = device
-         self.image = self.image.to(device)
-         return self
-     
-     def rand_init(device='cpu'):
-         data = torch.randint(65536, size=(640, 512, 1), device=device, dtype=torch.float32)
-         out = Thermal16bitImageTorch.from_torch(data)
-         out.frame_id = 'random'
-         out.stamp = np.random.rand()
-         return out
-     
-     def __eq__(self, other):
-         if self.frame_id != other.frame_id:
-             return False
+    def __init__(self, device):
+        super().__init__()
+        self.image = torch.zeros(0,0,1, device=device)
+        self.feature_keys = FeatureKeyList(
+            label=['radiation'],
+            metainfo=['16bit']
+        )
+        self.bridge = cv_bridge.CvBridge()
+        self.device = device
 
-         if abs(self.stamp - other.stamp) > 1e-8:
-             return False
+    def from_torch(image):
+        res = Thermal16bitImageTorch(device=image.device)
+        res.image = image.float()
+        return res
 
-         if self.feature_keys != other.feature_keys:
-             return False
+    def from_numpy(image, device):
+        res = Thermal16bitImageTorch(device=device)
+        res.image = torch.tensor(image, dtype=torch.float32, device=device)
+        return res   
 
-         if not torch.allclose(self.image, other.image):
-             return False
+    def to_rosmsg(self, encoding='passthrough', compressed=False):
+        '''
+        Convert 16-bit raw image to ROS message
+        '''
+        img = (self.image).cpu().numpy().astype(np.uint16)
+        if img.shape[-1] == 1:
+            img = img.squeeze(-1)
+        if compressed:
+            img_msg = self.bridge.cv2_to_compressed_imgmsg(img, encoding=encoding)
+        else:
+            img_msg = self.bridge.cv2_to_imgmsg(img, encoding=encoding)
 
-         return True
-     
-     def __repr__(self):
-         return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
+        img_msg.header.stamp = time_to_stamp(self.stamp)
+        img_msg.header.frame_id = self.frame_id
+        return img_msg
+    
+    def from_rosmsg(msg, device='cpu'):
+        '''Read 16-bit raw image from ROS message. Return as torch tensor. Single channel.'''
+        res = Thermal16bitImageTorch(device)
+        img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        if img.ndim == 2:
+            img = img[..., np.newaxis]
+        elif img.ndim == 3:
+            img = img[..., :1]
+        img = torch.from_numpy(img.astype(np.float32)).to(device)
+        res.image = img
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    def to_kitti(self, base_dir, idx):
+        '''Save 16-bit raw image'''
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        
+        save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        if self.image.device.type != 'cpu':
+            img_np = self.image.cpu().numpy().astype(np.uint16)
+        else:
+            img_np = self.image.numpy().astype(np.uint16)
+        # Remove channel dimension for saving
+        if img_np.shape[-1] == 1:
+            img_np = img_np.squeeze(-1)
+        cv2.imwrite(save_fp, img_np, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
+    def from_kitti(base_dir, idx, device='cpu'):
+        fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        img = Thermal16bitImageTorch(device=device)
+        img_np = cv2.imread(fp, cv2.IMREAD_UNCHANGED)
+        if img_np.ndim == 2:
+            img_np = img_np[..., np.newaxis]
+        img.image = torch.tensor(img_np, dtype=torch.float32, device=device)
+        
+        img.stamp = read_timestamp_file(base_dir, idx)
+        img.frame_id = read_info_file(base_dir,  'frame_id')
+        return img
+
+    def to(self, device):
+        self.device = device
+        self.image = self.image.to(device)
+        return self
+    
+    def rand_init(device='cpu'):
+        data = torch.randint(65536, size=(640, 512, 1), device=device, dtype=torch.float32)
+        out = Thermal16bitImageTorch.from_torch(data)
+        out.frame_id = 'random'
+        out.stamp = np.random.rand()
+        return out
+    
+    def __eq__(self, other):
+        if self.frame_id != other.frame_id:
+            return False
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+        if self.feature_keys != other.feature_keys:
+            return False
+        if not torch.allclose(self.image, other.image):
+            return False
+        return True
+    
+    def __repr__(self):
+        return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
      
 class FeatureImageTorch(TorchCoordinatorDataType): 
     """
@@ -519,6 +518,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = FeatureImage
     from_rosmsg_type = FeatureImage
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, feature_keys, device):
         super().__init__()
@@ -563,7 +563,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
         data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
@@ -597,7 +597,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
 
         img = FeatureImageTorch.from_torch(data, feature_keys)
         img.stamp = read_timestamp_file(base_dir, idx)
-        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        img.frame_id = read_info_file(base_dir,  'frame_id')
 
         return img
 

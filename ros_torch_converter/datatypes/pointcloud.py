@@ -12,12 +12,13 @@ from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 class PointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -126,7 +127,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
 
@@ -148,7 +149,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
             pc.colors = torch.tensor(pts[:, 3:6], device=device).float()
 
         pc.stamp = read_timestamp_file(base_dir, idx)
-        pc.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        pc.frame_id = read_info_file(base_dir,  'frame_id')
 
         return pc
 
@@ -195,6 +196,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, feature_keys, device):
         super().__init__()
@@ -274,7 +276,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
         
         data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
         metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
@@ -316,7 +318,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         fpct = FeaturePointCloudTorch.from_torch(pts=pts, features=features, mask=mask, feature_keys=feature_keys)
 
         fpct.stamp = read_timestamp_file(base_dir, idx)
-        fpct.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        fpct.frame_id = read_info_file(base_dir,  'frame_id')
 
         return fpct
 

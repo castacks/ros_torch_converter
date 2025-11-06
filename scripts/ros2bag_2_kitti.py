@@ -14,6 +14,7 @@ from tartandriver_utils.ros_utils import stamp_to_time
 
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
+from ros_torch_converter.datatypes.base import TimeSpec
 from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
 
 """
@@ -113,6 +114,14 @@ if __name__ == '__main__':
 
     frame_list = set()
 
+    ## initial simple implementation of interp topics
+    topics_to_interp = [k for k,v in topic_to_msgtype.items() if str_to_cvt_class[v].time_spec == TimeSpec.INTERP]
+    interp_buf = {k:[] for k in topics_to_interp}
+
+    print('collecting full interp data for the following topics:')
+    for t in topics_to_interp:
+        print(f'\t{t}')
+
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
@@ -143,6 +152,12 @@ if __name__ == '__main__':
 
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
+
+            ##add interp timestamps
+            if topic in topics_to_interp:
+                interp_buf[topic].append(msg_time)
+
+    interp_buf = {k:np.array(v) for k,v in interp_buf.items()}
 
     #update the tf tree
     frame_list = list(frame_list)
@@ -274,14 +289,26 @@ if __name__ == '__main__':
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
             name = topic_to_name[topic]
+            base_dir = os.path.join(args.dst_dir, name)
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
             else:
                 msg_time = timestamp * 1e-9
                 
+            ## handle interp data
+            if topic in topics_to_interp:
+                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
+                torch_data = torch_dtype.from_rosmsg(msg)
+
+                target_diffs = np.abs(interp_buf[topic] - msg_time)
+                idxs = np.argwhere(target_diffs < 1e-16).flatten()
+                for idx in idxs:
+                    torch_data.to_kitti_interp(base_dir, idx)
+
+            ## handle sync data
             target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
-            idxs = np.argwhere(target_diffs < 1e-8).flatten()
+            idxs = np.argwhere(target_diffs < 1e-16).flatten()
 
             if len(idxs) > 0:
 #                print('topic {} msg for frames {}'.format(topic, idxs))
@@ -307,7 +334,6 @@ if __name__ == '__main__':
                 else:
                     torch_data = torch_dtype.from_rosmsg(msg)
 
-                base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:
                     torch_data.to_kitti(base_dir, idx)
 
