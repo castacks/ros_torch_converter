@@ -1,0 +1,20 @@
+image_dir: thermal_left_processed
+pointcloud_dir: pointcloud_in_odom
+depth_output_dir: slam_depth_thermal_stack20_temp
+pose_output_dir: camera_poses_thermal_temp
+mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_mapping/data/masks/yamaha/thermal_left_rect_mask.png
+
+intrinsics: #fx,fy,cx,cy
+  - [347.95429323, 347.95429323, 323.05630493, 247.92877579] #after stereo rectify
+pointcloud_frame: sensor_init
+camera_frame: thermal_left/optical_frame
+odometry_frame: sensor_init
+pose_in_ned: True #extracting pose to ned for MAC
+vehicle_2_cam:
+  p: [0.19265, -0.15227,  0.05708]
+  q: [0.5574714, -0.54525728,  0.44844936,  0.43682184]
+
+use_chain: True #use this for all data extracted before 10/1/2025
+stack: 10 #stack +-N frames #comment out to disable
+max_depth: 200 #meters
+device: cuda

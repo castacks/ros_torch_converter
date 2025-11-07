@@ -276,7 +276,8 @@ class BEVGridTorch(TorchCoordinatorDataType):
             'resolution': self.bev_grid.metadata.resolution.cpu().numpy().tolist()
         }
 
-        yaml.dump(metadata, open(metadata_fp, 'w'), default_flow_style=False)
+        with open(metadata_fp, 'w') as f:
+            yaml.dump(metadata, f, default_flow_style=False)
 
         data = self.bev_grid.data.cpu().numpy()
         np.save(data_fp, data)

@@ -1,0 +1,20 @@
+image_dir: image_left_rect
+pointcloud_dir: pointcloud_in_odom
+depth_output_dir: slam_depth_rgb_stack20_temp
+pose_output_dir: camera_poses_rgb_temp
+mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_mapping/data/masks/yamaha/image_left_color_mask.png
+
+intrinsics: #fx,fy,cx,cy
+  - [455.7750, 456.3191, 497.1180, 251.8580]
+pointcloud_frame: sensor_init
+camera_frame: multisense/left_camera_optical_frame
+odometry_frame: sensor_init
+pose_in_ned: True #extracting pose to ned for MAC
+vehicle_2_cam:
+  p: [0.17265, -0.15227, 0.05708]
+  q: [0.55940, -0.54718, 0.44603, 0.43442]
+
+use_chain: False
+stack: 10 #stack +-N frames #comment out to disable
+max_depth: 200 #meters
+device: cuda
