@@ -1,4 +1,5 @@
 import os
+import h5py
 import yaml
 import array
 import torch
@@ -8,6 +9,7 @@ import numpy as np
 
 from sensor_msgs.msg import PointCloud2, PointField
 
+from tartandriver_utils.os_utils import load_yaml, save_yaml
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
@@ -270,14 +272,11 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         warnings.warn('havent implemented featpc->ros message yet')
         pass
 
-    def to_kitti(self, base_dir, idx):
+    def to_kitti(self, base_dir, idx, hdf5=False):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
         update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-        
-        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
             'feature_keys': [
@@ -288,31 +287,58 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
             ]
         }
 
-        with open(metadata_fp, 'w') as f:
-            yaml.dump(metadata, f)
-
         data = {
             'pts': self.pts.cpu().numpy(),
             'features': self.features.cpu().numpy(),
             'feat_mask': self.feat_mask.cpu().numpy()
         } 
-        np.savez(data_fp, **data)
+
+        if hdf5:
+            data_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
+            with h5py.File(data_fp, 'w') as h5_fp:
+                ## save data
+                h5_fp.create_group('data')
+                for k,v in data.items():
+                    ## TODO explore gzip vs. lzf, etc.
+                    h5_fp.create_dataset(f"data/{k}", data=v, compression='lzf')
+
+                ## save feature keys
+                h5_fp.create_group('feature_keys')
+                h5_fp.create_dataset("feature_keys/label", data=self.feature_keys.label, dtype=h5py.string_dtype())
+                h5_fp.create_dataset("feature_keys/metainfo", data=self.feature_keys.metainfo, dtype=h5py.string_dtype())
+
+        else:
+            data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+            save_yaml(metadata_fp, metadata)
+            np.savez(data_fp, **data)
 
     def from_kitti(base_dir, idx, device='cpu'):
         """define how to convert this dtype from a kitti file
         """
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
-        metadata = yaml.safe_load(open(metadata_fp, 'r'))
+        h5_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
 
-        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
+        if os.path.exists(h5_fp):
+            with h5py.File(h5_fp, "r") as h5_fp:
+                labels = [x.decode() for x in h5_fp['feature_keys']['label']]
+                metas = [x.decode() for x in h5_fp['feature_keys']['metainfo']]
+                pc_data = {k:np.array(v) for k,v in h5_fp["data"].items()}
+
+        else:
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+            metadata = yaml.safe_load(open(metadata_fp, 'r'))
+
+            labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
         
-        data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
-        pc_data = np.load(data_fp)
+            data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
+            pc_data = np.load(data_fp)
 
         pts = torch.tensor(pc_data['pts'], dtype=torch.float, device=device)
         features = torch.tensor(pc_data['features'], dtype=torch.float, device=device)
         mask = torch.tensor(pc_data['feat_mask'], dtype=torch.bool, device=device)
+
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
 
         fpct = FeaturePointCloudTorch.from_torch(pts=pts, features=features, mask=mask, feature_keys=feature_keys)
 
