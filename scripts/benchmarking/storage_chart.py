@@ -25,7 +25,7 @@ def dir_size(fp):
 
 def load_speed(fp, modality, dtype):
     base_dir = os.path.join(fp, modality)
-    N = kitti_n_frames(base_dir)
+    N = min(100, kitti_n_frames(base_dir))
     t1 = time.time()
     for i in range(N):
         dpt = dtype.from_kitti(base_dir, i)
@@ -38,7 +38,7 @@ if __name__ == '__main__':
     parser.add_argument('--title', type=str, required=False)
     args = parser.parse_args()
 
-    # subdirs = os.listdir(args.run_dir)
+    subdirs = os.listdir(args.run_dir)
     
     ##debug
     modalities = {
@@ -52,6 +52,8 @@ if __name__ == '__main__':
         'radio3_siglip2_feature_image_full': FeatureImageTorch
     }
 
+    modalities = {k:v for k,v in modalities.items() if k in subdirs}
+
     sizes = {k:dir_size(os.path.join(args.run_dir, k)) for k in modalities.keys()}
     speeds = {k:load_speed(args.run_dir, k, v) for k,v in modalities.items()}
 
@@ -60,8 +62,11 @@ if __name__ == '__main__':
 
     if args.title is not None:
         fig.suptitle(args.title)
+
+    total_storage = sum(sizes.values())
+    dpt_storage = total_storage / kitti_n_frames(args.run_dir)
     
-    axs[0].set_title(f"{args.run_dir} Storage (total: {sum(sizes.values()):.2f}GB)")
+    axs[0].set_title(f"{args.run_dir} Storage (total: {total_storage:.2f}GB, {1000*dpt_storage:.0f}MB/dpt)")
     axs[0].pie([x + 1e-8 for x in sizes.values()], labels=[f"{k} ({v:.2f}GB)" for k,v in sizes.items()], wedgeprops=dict(width=0.4))
     
     axs[1].set_title(f"{args.run_dir} Speed (total: {sum(speeds.values()):.2f}s)")
