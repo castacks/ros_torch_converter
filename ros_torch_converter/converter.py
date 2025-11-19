@@ -1,6 +1,5 @@
 import copy
 
-import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 
@@ -12,6 +11,7 @@ from ros_torch_converter.datatypes.pointcloud import PointCloudTorch, FeaturePoi
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
+from ros_torch_converter.datatypes.people_detections import PeopleDetectionsTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -28,7 +28,8 @@ str_to_cvt_class = {
     "Transform": TransformTorch,
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
-    "GoalArray": GoalArrayTorch
+    "GoalArray": GoalArrayTorch,
+    "PeopleDetections": PeopleDetectionsTorch
 }
 
 class ROSTorchConverter(Node):
@@ -63,7 +64,7 @@ class ROSTorchConverter(Node):
 
             self.converters[topic_conf["name"]] = str_to_cvt_class[topic_conf["type"]]
 
-            sub = self.create_subscription(
+            self.create_subscription(
                 self.converters[topic_conf["name"]].from_rosmsg_type,  # Message type
                 topic_conf["topic"],  # Topic name
                 lambda msg, topic_conf=topic_conf: self.handle_msg(
@@ -82,7 +83,9 @@ class ROSTorchConverter(Node):
 
     def get_data(self, return_times=False, device="cpu"):
         self.lock = True
-        data = {k: self.converters[k].from_rosmsg(msg, device=self.device) for k, msg in self.data.items()}
+        # Only convert non-None messages (skip optional topics that haven't received data)
+        data = {k: self.converters[k].from_rosmsg(msg, device=self.device) 
+                for k, msg in self.data.items() if msg is not None}
         times = copy.deepcopy(self.data_times)
         self.lock = False
 
@@ -90,24 +93,34 @@ class ROSTorchConverter(Node):
 
     def can_get_data(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
-        return all(
-            [
-                curr_time - data_time < self.config["max_age"]
-                for data_time in self.data_times.values()
-            ]
-        )
+        
+        for topic_conf in self.config["topics"]:
+            # Skip optional topics
+            if topic_conf.get("optional", False):
+                continue
+                
+            topic_name = topic_conf["name"]
+            data_time = self.data_times[topic_name]
+            
+            # Check if data is too old
+            if curr_time - data_time >= self.config["max_age"]:
+                return False
+        
+        return True
 
     def get_status_str(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
         out = "\n ---converter status--- \n"
         for topic_conf in self.config["topics"]:
-
             data_exists = self.data[topic_conf["name"]] is not None
             data_age = curr_time - self.data_times[topic_conf["name"]]
-            out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
+            is_optional = topic_conf.get("optional", False)
+            optional_str = " [OPTIONAL]" if is_optional else ""
+            out += "\t{:<16} exists: {} age:{:.2f}s{}\n".format(
                 topic_conf["name"] + " " + topic_conf["topic"] + ":",
                 data_exists,
                 data_age,
+                optional_str,
             )
 
         out += "can get data: {}\n".format(self.can_get_data())
