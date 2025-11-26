@@ -130,7 +130,7 @@ class RacepakShockPosTorch(TorchCoordinatorDataType):
     """shock position as [d_FL, d_FR, d_RL, d_RR]
     """
     to_rosmsg_type = RpShockSensors
-    from_rosmsg_type = c
+    from_rosmsg_type = RpShockSensors
     
     def __init__(self, device='cpu'):
         super().__init__()
