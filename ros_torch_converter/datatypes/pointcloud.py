@@ -311,7 +311,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
             data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
             metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
-            save_yaml(metadata_fp, metadata)
+            save_yaml(metadata, metadata_fp)
             np.savez(data_fp, **data)
 
     def from_kitti(base_dir, idx, device='cpu'):
