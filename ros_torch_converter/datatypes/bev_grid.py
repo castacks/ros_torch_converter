@@ -1,11 +1,14 @@
 import os
 import yaml
 import copy
+import h5py
 import torch
 import array
 
 import warnings
 import numpy as np
+
+import ros2_numpy_cpp
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
@@ -17,9 +20,9 @@ from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from grid_map_msgs.msg import GridMap
 
+from tartandriver_utils.os_utils import save_yaml
 from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
 
-import ros2_numpy_cpp
 
 class BEVGridTorch(TorchCoordinatorDataType):
     """
@@ -257,12 +260,9 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         return gridmap_msg
 
-    def to_kitti(self, base_dir, idx):
+    def to_kitti(self, base_dir, idx, hdf5=False):
         update_timestamp_file(base_dir, idx, self.stamp)
         update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
             'feature_keys': [
@@ -276,20 +276,52 @@ class BEVGridTorch(TorchCoordinatorDataType):
             'resolution': self.bev_grid.metadata.resolution.cpu().numpy().tolist()
         }
 
-        with open(metadata_fp, 'w') as f:
-            yaml.dump(metadata, f, default_flow_style=False)
-
         data = self.bev_grid.data.cpu().numpy()
-        np.save(data_fp, data)
+
+        if hdf5:
+            data_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
+            with h5py.File(data_fp, 'w') as h5_fp:
+                ## save data
+                h5_fp.create_dataset(f"data", data=data, compression='lzf')
+
+                ## save metadata
+                h5_fp.create_group('metadata')
+                h5_fp.create_dataset("metadata/origin", data=metadata['origin'], dtype='float32')
+                h5_fp.create_dataset("metadata/length", data=metadata['length'], dtype='float32')
+                h5_fp.create_dataset("metadata/resolution", data=metadata['resolution'], dtype='float32')
+
+                ## save feature keys
+                h5_fp.create_group('feature_keys')
+                h5_fp.create_dataset("feature_keys/label", data=self.bev_grid.feature_keys.label, dtype=h5py.string_dtype())
+                h5_fp.create_dataset("feature_keys/metainfo", data=self.bev_grid.feature_keys.metainfo, dtype=h5py.string_dtype())
+
+        else:
+            data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+            save_yaml(metadata, metadata_fp)
+            np.save(data_fp, data)
 
     def from_kitti(base_dir, idx, device='cpu'):
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+        ## load data from file
+        h5_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
 
-        metadata = yaml.safe_load(open(metadata_fp))
-        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
+        if os.path.exists(h5_fp):
+            with h5py.File(h5_fp, "r") as h5_fp:
+                metadata = {k:np.array(v) for k,v in h5_fp["metadata"].items()}
+                labels = [x.decode() for x in h5_fp['feature_keys']['label']]
+                metas = [x.decode() for x in h5_fp['feature_keys']['metainfo']]
+                data = np.array(h5_fp["data"])
+        else:
+            data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+            metadata = yaml.safe_load(open(metadata_fp))
+            labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+
+            data = np.load(data_fp)
         
+        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
+
         metadata = LocalMapperMetadata(
             origin = metadata['origin'],
             length = metadata['length'],
@@ -303,7 +335,6 @@ class BEVGridTorch(TorchCoordinatorDataType):
             device=device
         )
 
-        data = np.load(data_fp)
         bev_grid.data = torch.tensor(data, dtype=torch.float, device=device)
         
         bgt = BEVGridTorch.from_bev_grid(bev_grid)

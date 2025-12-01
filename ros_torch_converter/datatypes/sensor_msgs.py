@@ -419,10 +419,11 @@ class TwistTorch(TorchCoordinatorDataType):
 class FFCStatusTorch:
     from_rosmsg_type = Bool
 
-    def __init__(self, status, stamp, frame_id):
+    def __init__(self, status, stamp, frame_id, device='cpu'):
         self.status = status
         self.stamp = stamp
         self.frame_id = frame_id
+        self.device = device
 
     @classmethod
     def from_rosmsg(cls, msg, device="cpu", **kwargs):
@@ -448,19 +449,15 @@ class FFCStatusTorch:
         else:
             status = -1
         
-        timestamp_file = os.path.join(base_dir, "timestamps.txt")
-        if os.path.exists(timestamp_file):
-            timestamps = np.loadtxt(timestamp_file)
-            if timestamps.ndim == 0:
-                timestamps = np.array([timestamps])
-            stamp = timestamps[idx] if idx < len(timestamps) else 0.0
-        else:
-            stamp = 0.0
+        
+        stamp = read_timestamp_file(base_dir, idx)
+        frame_id = read_frame_file(base_dir, idx, 'frame_id')
 
-        return cls(status, stamp, "")
+        return cls(status, stamp, frame_id)
 
     def to_kitti(self, base_dir, idx):
-        os.makedirs(base_dir, exist_ok=True)
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
         
         data_file = os.path.join(base_dir, "data.txt")
         
@@ -478,6 +475,22 @@ class FFCStatusTorch:
         data[idx] = self.status
         
         np.savetxt(data_file, np.array(data), fmt='%d')
+
+    def rand_init(device="cpu"):
+        status = torch.tensor(np.random.choice([0, 1]), device=device)
+        stamp = np.random.rand()
+        frame_id = "random"
+        res = FFCStatusTorch(status, stamp, frame_id, device=device)
+        return res
+    
+    def __eq__(self, other):
+        if not isinstance(other, FFCStatusTorch):
+            return False
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+        if self.frame_id != other.frame_id:
+            return False
+        return torch.all(self.status == other.status)
 
     def to_rosmsg(self):
         msg = Bool()

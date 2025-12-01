@@ -1,5 +1,6 @@
 import os
 import yaml
+import h5py
 import warnings
 
 import cv2
@@ -10,6 +11,7 @@ import numpy as np
 from sensor_msgs.msg import Image, CompressedImage
 from perception_interfaces.msg import FeatureImage
 
+from tartandriver_utils.os_utils import save_yaml, load_yaml
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
@@ -559,14 +561,11 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         msg.header.frame_id = self.frame_id
         return msg
 
-    def to_kitti(self, base_dir, idx):
+    def to_kitti(self, base_dir, idx, hdf5=False):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
         update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
 
         metadata = {
             'feature_keys': [
@@ -576,24 +575,48 @@ class FeatureImageTorch(TorchCoordinatorDataType):
                 )
             ]
         }
-
-        with open(metadata_fp, 'w') as f:
-            yaml.dump(metadata, f, default_flow_style=False)
-
         data = self.image.cpu().numpy()
-        np.save(data_fp, data)
+
+        if hdf5:
+            data_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
+            with h5py.File(data_fp, 'w') as h5_fp:
+                ## save data
+                h5_fp.create_dataset(f"data", data=data, compression='lzf')
+
+                ## save feature keys
+                h5_fp.create_group('feature_keys')
+                h5_fp.create_dataset("feature_keys/label", data=self.feature_keys.label, dtype=h5py.string_dtype())
+                h5_fp.create_dataset("feature_keys/metainfo", data=self.feature_keys.metainfo, dtype=h5py.string_dtype())
+
+        else:
+            data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+            save_yaml(metadata, metadata_fp)
+            np.save(data_fp, data)
 
     def from_kitti(base_dir, idx, device='cpu'):
         """define how to convert this dtype from a kitti file
         """
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+         ## load data from file
+        h5_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
+
+        if os.path.exists(h5_fp):
+            with h5py.File(h5_fp, "r") as h5_fp:
+                labels = [x.decode() for x in h5_fp['feature_keys']['label']]
+                metas = [x.decode() for x in h5_fp['feature_keys']['metainfo']]
+                data = np.array(h5_fp["data"])
+        else:
+            data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+            metadata = yaml.safe_load(open(metadata_fp))
+            labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+
+            data = np.load(data_fp)
         
-        metadata = yaml.safe_load(open(metadata_fp))
-        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
         feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
 
-        data = np.load(data_fp)
         data = torch.tensor(data, dtype=torch.float, device=device)
 
         img = FeatureImageTorch.from_torch(data, feature_keys)
