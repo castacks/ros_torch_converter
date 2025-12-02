@@ -212,12 +212,16 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
         # TODO: figure out how to support multiple viz output types
         if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys.label):
-            viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
-            gridmap_rgb = gridmap_data[..., viz_idxs]
-            vmin = gridmap_rgb.reshape(-1, 3).min(axis=0).reshape(1, 1, 3)
-            vmax = gridmap_rgb.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
+            is_rgb = all([k in self.feature_keys.label for k in 'rgb'])
 
-            gridmap_cs = ((gridmap_rgb - vmin) / (vmax - vmin)).clip(0.0, 1.0)
+            if is_rgb:
+                viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in 'rgb']
+                gridmap_cs = gridmap_data[..., viz_idxs]
+            else:
+                viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
+                gridmap_rgb = gridmap_data[..., viz_idxs]
+                gridmap_cs = normalize_dino(gridmap_rgb)
+
             gridmap_cs = (gridmap_cs * 255.0).astype(np.int32)
 
             gridmap_color = (
