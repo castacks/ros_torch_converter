@@ -32,7 +32,7 @@ class ImageTorch(TorchCoordinatorDataType):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
         self.feature_keys = FeatureKeyList(
-            label=['r', 'g', 'b'],
+            label=['b', 'g', 'r'],
             metainfo=['raw'] * 3
         )
         self.bridge = cv_bridge.CvBridge()
