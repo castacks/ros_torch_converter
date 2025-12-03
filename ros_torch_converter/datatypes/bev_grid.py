@@ -211,9 +211,9 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
-        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys.label):
-            is_rgb = all([k in self.feature_keys.label for k in 'rgb'])
-
+        is_rgb = all([k in self.bev_grid.feature_keys.label for k in 'rgb'])
+        has_viz_key = all([k in self.bev_grid.feature_keys.label for k in viz_layers])
+        if gridmap_data.shape[-1] > 2 and (is_rgb or has_viz_key):
             if is_rgb:
                 viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in 'rgb']
                 gridmap_cs = gridmap_data[..., viz_idxs]
