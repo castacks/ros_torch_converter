@@ -1,22 +1,14 @@
-import os
-import yaml
-import copy
 import torch
-import array
 
-import warnings
 import numpy as np
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
-from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
-from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
 
 from nav_msgs.msg import OccupancyGrid
 
-from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
+from tartandriver_utils.ros_utils import time_to_stamp
 
-import ros2_numpy_cpp
 
 class OccupancyGridTorch(TorchCoordinatorDataType):
     """
@@ -41,7 +33,11 @@ class OccupancyGridTorch(TorchCoordinatorDataType):
         occgrid_msg.header.frame_id = self.frame_id
 
         occ_idx = self.bev_grid.feature_keys.index("occupancy")
-        occgrid_data = self.bev_grid.data[..., occ_idx].T.flatten().cpu().numpy().astype(int).tolist()
+        
+        # Handle NaNs which can occur when the map is empty/uninitialized
+        data = self.bev_grid.data[..., occ_idx].T.flatten().cpu().numpy()
+        data = np.nan_to_num(data, nan=-1.0)
+        occgrid_data = data.astype(int).tolist()
 
         occgrid_msg.info.resolution = self.bev_grid.metadata.resolution[0].item()
         occgrid_msg.info.width = self.bev_grid.metadata.N[0].item()
