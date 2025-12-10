@@ -15,6 +15,7 @@ from ros_torch_converter.utils import update_frame_file, update_timestamp_file, 
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
+from physics_atv_visual_mapping.utils import normalize_dino
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
@@ -220,7 +221,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
             else:
                 viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
                 gridmap_rgb = gridmap_data[..., viz_idxs]
-                gridmap_cs = normalize_dino(gridmap_rgb)
+                gridmap_cs = normalize_dino(torch.tensor(gridmap_rgb)).numpy()
 
             gridmap_cs = (gridmap_cs * 255.0).astype(np.int32)
 
