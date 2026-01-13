@@ -15,6 +15,7 @@ from ros_torch_converter.utils import update_frame_file, update_timestamp_file, 
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
+from physics_atv_visual_mapping.utils import normalize_dino
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
@@ -211,13 +212,17 @@ class BEVGridTorch(TorchCoordinatorDataType):
         gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
-        if gridmap_data.shape[-1] > 2 and (viz_layers[0] in self.bev_grid.feature_keys.label):
-            viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
-            gridmap_rgb = gridmap_data[..., viz_idxs]
-            vmin = gridmap_rgb.reshape(-1, 3).min(axis=0).reshape(1, 1, 3)
-            vmax = gridmap_rgb.reshape(-1, 3).max(axis=0).reshape(1, 1, 3)
+        is_rgb = all([k in self.bev_grid.feature_keys.label for k in 'rgb'])
+        has_viz_key = all([k in self.bev_grid.feature_keys.label for k in viz_layers])
+        if gridmap_data.shape[-1] > 2 and (is_rgb or has_viz_key):
+            if is_rgb:
+                viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in 'rgb']
+                gridmap_cs = gridmap_data[..., viz_idxs]
+            else:
+                viz_idxs = [self.bev_grid.feature_keys.label.index(k) for k in viz_layers]
+                gridmap_rgb = gridmap_data[..., viz_idxs]
+                gridmap_cs = normalize_dino(torch.tensor(gridmap_rgb)).numpy()
 
-            gridmap_cs = ((gridmap_rgb - vmin) / (vmax - vmin)).clip(0.0, 1.0)
             gridmap_cs = (gridmap_cs * 255.0).astype(np.int32)
 
             gridmap_color = (
