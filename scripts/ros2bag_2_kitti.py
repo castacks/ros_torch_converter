@@ -309,6 +309,10 @@ if __name__ == '__main__':
 
                 base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:
+                    # Default stamp to tf stamp if no stamp data in message
+                    # (like default ROS messages e.g. Float32)
+                    if torch_data.stamp == -1:
+                        torch_data.stamp = queue['topic_times'][topic][idx]
                     torch_data.to_kitti(base_dir, idx)
 
     ## check that all idxs got filled
