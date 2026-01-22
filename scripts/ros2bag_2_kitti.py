@@ -2,6 +2,8 @@ import os
 import yaml
 import argparse
 import copy
+import time
+from datetime import timedelta
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -292,6 +294,8 @@ if __name__ == '__main__':
         
         connections = [x for x in reader.connections if x.topic in target_topics]
 
+        start = time.time()
+        last_idx = -1
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
@@ -306,8 +310,15 @@ if __name__ == '__main__':
             idxs = np.argwhere(target_diffs < 1e-8).flatten()
 
             if len(idxs) > 0:
+                last_idx = max(last_idx, idxs[0].item())
+                dur = time.time()-start
 #                print('topic {} msg for frames {}'.format(topic, idxs))
-                print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
+                rate = last_idx/dur
+                if rate > 0:
+                    time_left = (n_frames-last_idx)/rate
+                else:
+                    time_left = 0
+                print('proc idx {}/{}, Avg {:.1f} Samp/s, Time left: {}'.format(idxs[0].item(), n_frames, rate, timedelta(seconds=int(time_left))), end='\r')
                 checks[topic].append(idxs)
 
                 torch_dtype = str_to_cvt_class[topic_config[topic]['type']]
@@ -336,6 +347,11 @@ if __name__ == '__main__':
                     if torch_data.stamp == -1:
                         torch_data.stamp = queue['topic_times'][topic][idx]
                     torch_data.to_kitti(base_dir, idx)
+    
+    dur = time.time()-start
+    rate = n_frames/dur
+    time_left = dur
+    print('proc idx {}/{}, Avg {:.1f} Samp/s, Total time: {}'.format(n_frames, n_frames, rate, timedelta(seconds=int(time_left))))
 
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
