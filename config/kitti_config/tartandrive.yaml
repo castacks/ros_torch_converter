@@ -8,7 +8,7 @@ interp_tol: 0.2
 backward_interpolation: false
 
 #overrride tfs with values from config (STRONGLY RECOMMEND USING)
-calib_file: $WS/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+calib_file: $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
 
 topics:
   # Odom
@@ -94,44 +94,3 @@ topics:
     topic: /multisense/left/image_rect_color
     type: Image
     max_age: 1.
-
-  - name: image_right_rect
-    topic: /multisense/right/image_rect
-    type: Image
-    max_age: 1.
-
-  - name: thermal_left
-    topic: /thermal_left/image
-    type: Thermal16bitImage
-    max_age: 1.
-    optional: True
-  
-  - name: thermal_right
-    topic: /thermal_right/image
-    type: Thermal16bitImage
-    max_age: 1.
-    optional: True
-
-  - name: thermal_left_processed
-    topic: /thermal_left/image_processed
-    type: ThermalImage
-    max_age: 1.
-    optional: True
-  
-  - name: thermal_right_processed
-    topic: /thermal_right/image_processed
-    type: ThermalImage
-    max_age: 1.
-    optional: True
-  
-  - name: thermal_left_ffc
-    topic: /thermal_left/ffc_status
-    type: FFCStatus
-    max_age: 1.
-    optional: True
-
-  - name: thermal_right_ffc
-    topic: /thermal_right/ffc_status
-    type: FFCStatus
-    max_age: 1.
-    optional: True
