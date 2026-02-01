@@ -74,7 +74,6 @@ def get_filtered_config(connections, config):
 
     return filtered_config
 
-
 def check_missing_types(config):
     """
     Check all types listed in the config exist
@@ -233,10 +232,11 @@ def process_topic_wrapper(args_tuple):
                 except Exception as e:
                     continue
                 
+                msg_time = timestamp * 1e-9
                 if hasattr(msg, "header") and not args.use_bag_time:
-                    msg_time = stamp_to_time(msg.header.stamp)
-                else:
-                    msg_time = timestamp * 1e-9
+                    stamp_time = stamp_to_time(msg.header.stamp)
+                    if stamp_time != 0: # assume bag time if unpopulated stamp
+                        msg_time = stamp_time
 
                 target_diffs = np.abs(topic_times - msg_time)
                 idxs = np.argwhere(target_diffs < 1e-8).flatten()
@@ -286,65 +286,6 @@ def process_topic_wrapper(args_tuple):
         progress_queue.put((topic, 'error', 0, n_frames, 0.0))
         return topic, []
 
-def one_topic_to_kitti(
-    reader, connection, topic_config, args, queue, camera_info_cache, checks
-):
-    start = time.time()
-    last_idx = -1
-    assert not isinstance(connection, list), "Can only pass single connection through to fxn"
-    for connection, timestamp, rawdata in reader.messages(connections=[connection]):
-        msg = reader.deserialize(rawdata, connection.msgtype)
-        topic = connection.topic
-        name = topic_config[topic]['name']
-
-        if hasattr(msg, "header") and not args.use_bag_time:
-            msg_time = stamp_to_time(msg.header.stamp)
-        else:
-            msg_time = timestamp * 1e-9
-
-        target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
-        idxs = np.argwhere(target_diffs < 1e-8).flatten()
-
-        if len(idxs) > 0:
-            last_idx = max(last_idx, idxs[0].item())
-            dur = time.time()-start
-            #                print('topic {} msg for frames {}'.format(topic, idxs))
-            rate = last_idx/dur
-            if rate > 0:
-                time_left = (n_frames-last_idx)/rate
-            else:
-                time_left = 0
-            print('Topic: {}: proc idx {}/{}, Avg {:.1f} Samp/s, Time left: {}'.format(connection.topic, idxs[0].item(), n_frames, rate, timedelta(seconds=int(time_left))), end='\r')
-            checks[topic].append(idxs)
-
-            torch_dtype = str_to_cvt_class[topic_config[topic]['type']]
-
-            camera_info_torch = None
-            # Check if we should rectify this image
-            if args.rectify and 'CompressedImage' in topic_config[topic]['type']:
-                # Try to find a matching camera_info topic
-                # Assume camera_info topic is same base topic with /camera_info suffix
-                base_topic = topic.replace('/image_raw/compressed', '').replace('/compressed', '')
-                camera_info_topic = base_topic + '/camera_info'
-                camera_info_torch = camera_info_cache.get(camera_info_topic, None)
-                if camera_info_torch is None:
-                    print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
-
-            # Convert message with optional rectification
-            if camera_info_torch is not None:
-                torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
-            else:
-                torch_data = torch_dtype.from_rosmsg(msg)
-
-            base_dir = os.path.join(args.dst_dir, name)
-            for idx in idxs:
-                # Default stamp to tf stamp if no stamp data in message
-                # (like default ROS messages e.g. Float32)
-                if torch_data.stamp == -1:
-                    torch_data.stamp = queue['topic_times'][topic][idx]
-                torch_data.to_kitti(base_dir, idx)
-
-
 if __name__ == '__main__':
     # Use 'spawn' instead of 'fork' to avoid issues with PyTorch/OpenCV in forked processes
     try:
@@ -393,7 +334,8 @@ if __name__ == '__main__':
 
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
-        connections = [x for x in reader.connections if x.topic in all_topics]
+        # Do not add topics with 0 count to the queue, else sync issues
+        connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in all_topics]
 
         # update target topics to be only valid topics
         topic_config = get_filtered_config(connections, config)
@@ -407,7 +349,9 @@ if __name__ == '__main__':
 
             msg_time = timestamp * 1e-9
             if hasattr(msg, "header") and not args.use_bag_time:
-                msg_time = stamp_to_time(msg.header.stamp)
+                stamp_time = stamp_to_time(msg.header.stamp)
+                if stamp_time != 0: # assume bag time if unpopulated stamp
+                    msg_time = stamp_time
                 frame_list.add(msg.header.frame_id)
 
             if hasattr(msg, "child_frame_id"):
@@ -642,6 +586,7 @@ if __name__ == '__main__':
     checks = {k:np.sort(np.concatenate(v)) if len(v) > 0 else np.array([]) for k,v in checks.items()}
 
     print('Verification:')
+    print("{}/{} valid frames for dataset".format(all_valid_mask.sum(), all_valid_mask.shape[0]))
     for topic, idxs in checks.items():
         if len(idxs) > 0:
             valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))

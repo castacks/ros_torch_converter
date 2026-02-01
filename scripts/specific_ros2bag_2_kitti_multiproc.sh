@@ -8,9 +8,8 @@ declare -a dirs=(
 )
 
 
-# src_dir_path=${TARTANDRIVER_ROSBAG_DIR}/
-src_dir_path="/home/tartandriver/rosbags/"
-dst_dir_path=${TARTANDRIVER_DATA_DIR}/dynamics/yamaha_kitti/testspeed
+src_dir_path=${TARTANDRIVER_ROSBAG_DIR}/
+dst_dir_path=${TARTANDRIVER_DATA_DIR}/dynamics/yamaha_kitti/debug
 
 # Check if all source paths exist
 missing_paths=()
@@ -37,8 +36,6 @@ else
         echo "   - $path"
     done
 fi
-echo "src: ${src_path}"
-echo "dst: ${dst_path}"
 
 # Ask user to continue
 echo ""
@@ -70,8 +67,12 @@ do
     #     --color
 
     # Uncomment for local copy speeds
+    src_path=${src_dir_path}/${i}
+    dst_path=${dst_dir_path}/${i}
+    echo "src: ${src_path}"
+    echo "dst: ${dst_path}"
     tmp_kitti_path=${TARTANDRIVER_SCRATCH_DIR}/dataset/${i}
-    tmp_bag_path=${TARTANDRIVER_ROSBAG_DIR}/${i}
+    tmp_bag_path=${TARTANDRIVER_RECORD_DIR}/dataset/${i}
 
     echo "Copying data to local: ${tmp_bag_path}..."
     mkdir -p ${tmp_bag_path}
@@ -79,15 +80,14 @@ do
 
     echo "Executing ros2bag_2_kitti.py..."
     time python3 ros2bag_2_kitti_multiproc.py --config ../config/kitti_config/tartandrive.yaml \
-        --src_dir "${src_path}" \
-        --dst_dir "${dst_path}" \
-        --force \
-        --num_workers 12 \
-        --color
+        --src_dir "${tmp_bag_path}" \
+        --dst_dir "${tmp_kitti_path}" \
+        --color \
+        $@
     
     echo "Copying data from tmp to dst: ${dst_path}..."
     mkdir -p ${dst_path}
-    time rsync -avP ${tmp_kitti_path}/* ${dst_path}/
+    time rsync -a --info=progress2 ${tmp_kitti_path}/* ${dst_path}/
 
     echo "Clean up clean up everybody everywhere"
     time rm -r ${tmp_bag_path} ${tmp_kitti_path}
