@@ -1,0 +1,5 @@
+- name: gps_odom
+  topic: /odometry/filtered_odom
+  type: OdomRBState
+  max_age: 1.
+  args: {}

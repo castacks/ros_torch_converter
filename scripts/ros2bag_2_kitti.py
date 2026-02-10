@@ -1,5 +1,6 @@
 import os
 import yaml
+import itertools
 import argparse
 
 import numpy as np
@@ -11,6 +12,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
 from tartandriver_utils.ros_utils import stamp_to_time
+from tartandriver_utils.os_utils import load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
@@ -76,7 +78,11 @@ if __name__ == '__main__':
         if x == 'n':
             exit(0)
 
-    config = yaml.safe_load(open(args.config, 'r'))
+    config = load_yaml(args.config)
+
+    #not sure if theres a better way to flatten list
+    config['topics'] = list(itertools.chain(*config['topics']))
+
     target_topics = [x['topic'] for x in config['topics']]
     topic_to_msgtype = {x['topic']:x['type'] for x in config['topics']}
     topic_to_name = {x['topic']:x['name'] for x in config['topics']}
@@ -147,14 +153,14 @@ if __name__ == '__main__':
     #update the tf tree
     frame_list = list(frame_list)
     has_calib_file = False
-    if 'calib_file' in config.keys():
+    if 'calibration' in config.keys():
         print('applying calib file from config...')
-        calib_config = yaml.safe_load(open(config['calib_file'], 'r'))
+        calib_config = config['calibration']
         has_calib_file = True
 
     elif args.calib_file is not None:
         print('applying calib file from cli...')
-        calib_config = yaml.safe_load(open(args.calib_file, 'r'))
+        calib_config = load_yaml(args.calib_file)
         has_calib_file = True
 
     if not has_calib_file:

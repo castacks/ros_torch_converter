@@ -13,7 +13,7 @@ def update_frame_file(base_dir, idx, frame_type, frame_id):
 
         if frame_type in frame_dict.keys() and frame_dict[frame_type] != frame_id:
             warnings.simplefilter('once')
-            warnings.warn(f'frame id {frame_type} doesnt match previous value {frame_dict[frame_type]}! Check that your frames are correct!')
+            warnings.warn(f'for topic {base_dir}, frame id {frame_id} doesnt match previous value {frame_dict[frame_type]}! Check that this is correct!')
 
         frame_dict[frame_type] = frame_id
 
