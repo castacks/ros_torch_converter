@@ -14,7 +14,7 @@ def update_info_file(base_dir, key, value):
 
         if key in info_dict.keys() and info_dict[key] != value:
             warnings.simplefilter('once')
-            warnings.warn(f'{key} doesnt match previous value {info_dict[key]}! Check that this is correct!')
+            warnings.warn(f'for {base_dir}:{key}, {value} doesnt match previous value {info_dict[key]}! Check that this is correct!')
 
         info_dict[key] = value
 

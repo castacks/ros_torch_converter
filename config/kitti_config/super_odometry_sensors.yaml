@@ -10,8 +10,9 @@
   #overrride tfs with values from config (STRONGLY RECOMMEND USING)
   calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
 
-  topics:
+  topics: !listcat
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/multisense_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml

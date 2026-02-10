@@ -1,12 +1,12 @@
 import os
-import yaml
-import itertools
+import tqdm
 import argparse
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 from pathlib import Path
+from tabulate import tabulate
 
 from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
@@ -81,12 +81,20 @@ if __name__ == '__main__':
 
     config = load_yaml(args.config)
 
-    #not sure if theres a better way to flatten list
-    config['topics'] = list(itertools.chain(*config['topics']))
+    cvt_info = {}
+    for tconf in config['topics']:
+        name = f"{tconf['group']}/{tconf['name']}"
+        assert name not in cvt_info.keys()
 
-    target_topics = [x['topic'] for x in config['topics']]
-    topic_to_msgtype = {x['topic']:x['type'] for x in config['topics']}
-    topic_to_name = {x['topic']:x['name'] for x in config['topics']}
+        cvt_info[name] = {
+            'name': tconf['name'],
+            'group': tconf['group'],
+            'topic': tconf['topic'],
+            'msgtype': tconf['type'],
+            'dir': os.path.join(args.dst_dir, tconf['group'], tconf['name'])
+        }
+
+    target_topics = set([x['topic'] for x in cvt_info.values()])
 
     # Check for missing message type converters upfront
     missing_types = []
@@ -121,12 +129,24 @@ if __name__ == '__main__':
     frame_list = set()
 
     ## initial simple implementation of interp topics
-    topics_to_interp = [k for k,v in topic_to_msgtype.items() if str_to_cvt_class[v].time_spec == TimeSpec.INTERP]
+    topics_to_interp = [_ci['topic'] for _ci in cvt_info.values() if str_to_cvt_class[_ci['msgtype']].time_spec == TimeSpec.INTERP]
     interp_buf = {k:[] for k in topics_to_interp}
 
     print('collecting full interp data for the following topics:')
     for t in topics_to_interp:
         print(f'\t{t}')
+
+    ##print proc check table
+    tabdata = [['Name', 'Group', 'Msg Type', 'Topic', 'Save Path']]
+    for _ci in cvt_info.values():
+        tabdata.append([_ci[k] for k in ['name', 'group', 'msgtype', 'topic', 'dir']])
+
+    print(tabulate(tabdata, headers='firstrow', tablefmt='outline'))
+
+    if not args.force:
+        x = input('does this look correct?[Y/n]')
+        if x == 'n':
+            exit(0)
 
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
@@ -219,9 +239,9 @@ if __name__ == '__main__':
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
-    for topic_config in config['topics']:
-        topic = topic_config['topic']
-        topic_dir = os.path.join(args.dst_dir, topic_config['name'])
+    for cvt_config in cvt_info.values():
+        topic = cvt_config['topic']
+        topic_dir = os.path.join(args.dst_dir, cvt_config['dir'])
         os.makedirs(topic_dir, exist_ok=True)
 
         np.savetxt(os.path.join(topic_dir, 'timestamps.txt'), queue['topic_times'][topic])
@@ -269,23 +289,27 @@ if __name__ == '__main__':
         exit(0)
     
     # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
+    # import sys
+    pbars = {k:tqdm.tqdm(desc=k, total=all_valid_mask.sum(), position=i) for i,k in enumerate(cvt_info.keys())}
+
     with AnyReader([bagpath], default_typestore=typestore) as reader:
+        #TODO cleanup as postproc
         # If rectification is requested, collect camera_info messages
-        if args.rectify:
-            # Cache for camera_info messages
-            camera_info_cache = {}
-            camera_info_topics = [topic for topic in target_topics if 'camera_info' in topic]
-            if camera_info_topics:
-                print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
-                camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
-                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
-                    msg = reader.deserialize(rawdata, connection.msgtype)
-                    # Convert to CameraInfoTorch for rectification
-                    camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
-                    camera_info_cache[connection.topic] = camera_info_torch
-                print(f"Cached {len(camera_info_cache)} camera_info messages")
-            else:
-                print("WARNING: --rectify flag set but no camera_info topics found in bag!")
+        # if args.rectify:
+        #     # Cache for camera_info messages
+        #     camera_info_cache = {}
+        #     camera_info_topics = [topic for topic in target_topics if 'camera_info' in topic]
+        #     if camera_info_topics:
+        #         print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
+        #         camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
+        #         for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
+        #             msg = reader.deserialize(rawdata, connection.msgtype)
+        #             # Convert to CameraInfoTorch for rectification
+        #             camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
+        #             camera_info_cache[connection.topic] = camera_info_torch
+        #         print(f"Cached {len(camera_info_cache)} camera_info messages")
+        #     else:
+        #         print("WARNING: --rectify flag set but no camera_info topics found in bag!")
         
         connections = [x for x in reader.connections if x.topic in target_topics]
 
@@ -294,55 +318,63 @@ if __name__ == '__main__':
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
-            name = topic_to_name[topic]
-            base_dir = os.path.join(args.dst_dir, name)
+            cinfo_to_update = [(k,v) for k,v in cvt_info.items() if v['topic'] == topic]
 
-            if hasattr(msg, "header") and not args.use_bag_time:
-                msg_time = stamp_to_time(msg.header.stamp)
-            else:
-                msg_time = timestamp * 1e-9
-                
-            ## handle interp data
-            if topic in topics_to_interp:
-                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
-                torch_data = torch_dtype.from_rosmsg(msg)
+            for _ckey, _cinfo in cinfo_to_update:
+                base_dir = _cinfo['dir']
+                torch_dtype = str_to_cvt_class[_cinfo['msgtype']]
 
-                target_diffs = np.abs(interp_buf[topic] - msg_time)
-                idxs = np.argwhere(target_diffs < 1e-16).flatten()
-                for idx in idxs:
-                    torch_data.to_kitti_interp(base_dir, idx)
-
-            ## handle sync data
-            target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
-            idxs = np.argwhere(target_diffs < 1e-16).flatten()
-
-            if len(idxs) > 0:
-#                print('topic {} msg for frames {}'.format(topic, idxs))
-                print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
-                checks[topic].append(idxs)
-
-                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
-                
-                camera_info_torch = None
-                # Check if we should rectify this image
-                if args.rectify and 'CompressedImage' in topic_to_msgtype[topic]:
-                    # Try to find a matching camera_info topic
-                    # Assume camera_info topic is same base topic with /camera_info suffix
-                    base_topic = topic.replace('/image_raw/compressed', '').replace('/compressed', '')
-                    camera_info_topic = base_topic + '/camera_info'
-                    camera_info_torch = camera_info_cache.get(camera_info_topic, None)
-                    if camera_info_torch is None:
-                        print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
-                
-                # Convert message with optional rectification
-                if camera_info_torch is not None:
-                    torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
+                if hasattr(msg, "header") and not args.use_bag_time:
+                    msg_time = stamp_to_time(msg.header.stamp)
                 else:
+                    msg_time = timestamp * 1e-9
+                    
+                ## handle interp data
+                if topic in topics_to_interp:
                     torch_data = torch_dtype.from_rosmsg(msg)
 
-                for idx in idxs:
-                    torch_data.to_kitti(base_dir, idx)
+                    target_diffs = np.abs(interp_buf[topic] - msg_time)
+                    idxs = np.argwhere(target_diffs < 1e-16).flatten()
+                    for idx in idxs:
+                        torch_data.to_kitti_interp(base_dir, idx)
 
+                ## handle sync data
+                target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
+                idxs = np.argwhere(target_diffs < 1e-16).flatten()
+
+                if len(idxs) > 0:
+    #                print('topic {} msg for frames {}'.format(topic, idxs))
+                    # print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
+
+                    checks[topic].append(idxs)
+
+                    torch_data = torch_dtype.from_rosmsg(msg)
+                    
+                    #TODO move to separate postproc
+                    # camera_info_torch = None
+                    # # Check if we should rectify this image
+                    # if args.rectify and 'CompressedImage' in topic_to_msgtype[topic]:
+                    #     # Try to find a matching camera_info topic
+                    #     # Assume camera_info topic is same base topic with /camera_info suffix
+                    #     base_topic = topic.replace('/image_raw/compressed', '').replace('/compressed', '')
+                    #     camera_info_topic = base_topic + '/camera_info'
+                    #     camera_info_torch = camera_info_cache.get(camera_info_topic, None)
+                    #     if camera_info_torch is None:
+                    #         print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
+                    
+                    # # Convert message with optional rectification
+                    # if camera_info_torch is not None:
+                    #     torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
+                    # else:
+                    #     torch_data = torch_dtype.from_rosmsg(msg)
+
+                    for idx in idxs:
+                        torch_data.to_kitti(base_dir, idx)
+                        pbars[_ckey].update()
+
+    for pbar in pbars.values():
+        pbar.close()
+        
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
 
@@ -350,5 +382,4 @@ if __name__ == '__main__':
 
     for topic, idxs in checks.items():
         valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
-        print('{} has all frames: {}'.format(topic, valid))
-
+        print('{} has all frames: {}'.format(topic, valid), flush=True)

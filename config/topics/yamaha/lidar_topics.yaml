@@ -1,0 +1,13 @@
+- name: velodyne_1
+  group: sensors
+  topic: /velodyne_1/velodyne_points
+  type: PointCloud
+  max_age: 1.
+  args: {}
+
+- name: velodyne_2
+  group: sensors
+  topic: /velodyne_2/velodyne_points
+  type: PointCloud
+  max_age: 1.
+  args: {}

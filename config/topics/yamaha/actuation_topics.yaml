@@ -1,19 +1,23 @@
-    - name: steer_angle
-      topic: /talon/current_position
-      type: Float32
-      args: {}
+- name: steer_angle
+  group: controls
+  topic: /talon/current_position
+  type: Float32
+  args: {}
 
-    - name: command
-      topic: /mux/cmd
-      type: Command
-      args: {}
+- name: command
+  group: controls
+  topic: /mux/cmd
+  type: Command
+  args: {}
 
-    - name: teleop_command
-      topic: /teleop_cmd
-      type: Command
-      args: {}
+- name: teleop_command
+  group: controls
+  topic: /teleop_cmd
+  type: Command
+  args: {}
 
-    - name: auto_command
-      topic: /auto_cmd
-      type: Command
-      args: {}
+- name: auto_command
+  group: controls
+  topic: /auto_cmd
+  type: Command
+  args: {}

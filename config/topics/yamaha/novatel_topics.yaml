@@ -1,4 +1,5 @@
 - name: gps_odom
+  group: sensors
   topic: /odometry/filtered_odom
   type: OdomRBState
   max_age: 1.
