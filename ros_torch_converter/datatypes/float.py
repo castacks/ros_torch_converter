@@ -2,8 +2,8 @@ import os
 import torch
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from std_msgs.msg import Float32
 
@@ -12,6 +12,7 @@ class Float32Torch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = Float32
     from_rosmsg_type = Float32
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device='cpu'):
         super().__init__()
@@ -43,10 +44,17 @@ class Float32Torch(TorchCoordinatorDataType):
         """
         note that some dtypes  should be stored as rows of a matrix
         """
-        update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_timestamp_file(base_dir, idx, self.stamp, file='timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        self.save_to_file(base_dir, idx, file='data.txt')
 
-        save_fp = os.path.join(base_dir, "data.txt")
+    def to_kitti_interp(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        self.save_to_file(base_dir, idx, file='interp_data.txt')
+
+    def save_to_file(self, base_dir, idx, file='data.txt'):
+        save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1])
         else:
@@ -71,7 +79,7 @@ class Float32Torch(TorchCoordinatorDataType):
         out.data = torch.tensor(data, device=device).float()
 
         out.stamp = read_timestamp_file(base_dir, idx)
-        out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        out.frame_id = read_info_file(base_dir,  'frame_id')
 
         return out
     
@@ -81,7 +89,7 @@ class Float32Torch(TorchCoordinatorDataType):
         data = np.loadtxt(fp).reshape(-1)[idxs]
         data = torch.tensor(data, device=device).float()
         stamps = read_timestamp_file(base_dir, idxs)
-        frame_ids = read_frame_file(base_dir, idxs, 'frame_id')
+        frame_ids = read_info_file(base_dir,'frame_id')
 
         out = [Float32Torch.from_torch(x) for x in data]
 

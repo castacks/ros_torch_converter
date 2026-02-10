@@ -1,9 +1,25 @@
 import abc
+import enum
+
+class TimeSpec(enum.Enum):
+    """
+    Enum for various data storage methods
+    """
+    ## placeholder
+    UNDEFINED = -1
+
+    ## store exactly one datapoint per run
+    STATIC = 0
+
+    ## store exactly one datapoint per timestep
+    SYNC = 1
+
+    ## store an arbitrary number of datapoints per timestep
+    INTERP = 2
 
 class TorchCoordinatorDataType(abc.ABC):
     """
     Interface class for TorchCoordinator datatypes (this is the only thing we want to support in the TorchCoordinator pipeline)
-    #TODO think about integrating more cleanly into ros_torch_converter
     """
     def __init__(self):
         self.stamp = -1.
@@ -19,6 +35,12 @@ class TorchCoordinatorDataType(abc.ABC):
     @abc.abstractmethod
     def from_rosmsg_type(self):
         """Define output rosmsg type
+        """
+
+    @property
+    @abc.abstractmethod
+    def time_spec(self):
+        """Define TimeSpec type
         """
 
     @abc.abstractmethod

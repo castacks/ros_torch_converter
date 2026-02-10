@@ -10,8 +10,8 @@ import numpy as np
 
 import ros2_numpy_cpp
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
@@ -31,6 +31,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = GridMap
     from_rosmsg_type = GridMap
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -267,7 +268,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx, hdf5=False):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
         metadata = {
             'feature_keys': [
@@ -344,7 +345,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
         
         bgt = BEVGridTorch.from_bev_grid(bev_grid)
         bgt.stamp = read_timestamp_file(base_dir, idx)
-        bgt.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        bgt.frame_id = read_info_file(base_dir,  'frame_id')
         return bgt
     
     def rand_init():

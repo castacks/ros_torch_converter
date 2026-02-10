@@ -8,11 +8,11 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import (
-    update_frame_file,
+    update_info_file,
     update_timestamp_file,
-    read_frame_file,
+    read_info_file,
     read_timestamp_file,
 )
 
@@ -22,6 +22,7 @@ class ImuTorch(TorchCoordinatorDataType):
 
     from_rosmsg_type = Imu
     to_rosmsg_type = Imu
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device="cpu"):
         super().__init__()
@@ -72,7 +73,7 @@ class ImuTorch(TorchCoordinatorDataType):
         Each row: [qx, qy, qz, qw, wx, wy, wz, ax, ay, az] orientation, angular, linear
         """
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
+        update_info_file(base_dir, "frame_id", self.frame_id)
 
         save_fp = os.path.join(base_dir, "data.txt")
         if not os.path.exists(save_fp):
@@ -102,7 +103,7 @@ class ImuTorch(TorchCoordinatorDataType):
         res.angular_velocity = data[4:7]
         res.linear_acceleration = data[7:10]
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, "frame_id")
+        res.frame_id = read_info_file(base_dir, 'frame_id')
         return res
 
     def to_rosmsg(self):
@@ -157,6 +158,7 @@ class NavSatFixTorch(TorchCoordinatorDataType):
 
     from_rosmsg_type = NavSatFix
     to_rosmsg_type = NavSatFix
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device="cpu"):
         super().__init__()
@@ -178,7 +180,7 @@ class NavSatFixTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
+        update_info_file(base_dir, "frame_id", self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = np.array([self.latitude, self.longitude, self.altitude])
@@ -193,7 +195,7 @@ class NavSatFixTorch(TorchCoordinatorDataType):
         res.longitude = data[1]
         res.altitude = data[2]
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, "frame_id")
+        res.frame_id = read_info_file(base_dir, 'frame_id')
         return res
 
     def to_rosmsg(self):
@@ -237,6 +239,7 @@ class PoseWithCovarianceTorch(TorchCoordinatorDataType):
 
     from_rosmsg_type = PoseWithCovarianceStamped
     to_rosmsg_type = PoseWithCovarianceStamped
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device="cpu"):
         super().__init__()
@@ -273,7 +276,7 @@ class PoseWithCovarianceTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
+        update_info_file(base_dir, "frame_id", self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = torch.cat([self.position, self.orientation])
@@ -287,7 +290,7 @@ class PoseWithCovarianceTorch(TorchCoordinatorDataType):
         res.position = data[:3]
         res.orientation = data[3:7]
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, "frame_id")
+        res.frame_id = read_info_file(base_dir, 'frame_id')
         return res
 
     def to_rosmsg(self):
@@ -335,6 +338,7 @@ class TwistTorch(TorchCoordinatorDataType):
 
     from_rosmsg_type = TwistStamped
     to_rosmsg_type = TwistStamped
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device="cpu"):
         super().__init__()
@@ -362,7 +366,7 @@ class TwistTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
+        update_info_file(base_dir, "frame_id", self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = torch.cat([self.linear, self.angular])
@@ -376,7 +380,7 @@ class TwistTorch(TorchCoordinatorDataType):
         res.linear = data[:3]
         res.angular = data[3:6]
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, "frame_id")
+        res.frame_id = read_info_file(base_dir, 'frame_id')
         return res
 
     def to_rosmsg(self):

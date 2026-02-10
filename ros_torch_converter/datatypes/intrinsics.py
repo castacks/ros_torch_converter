@@ -3,8 +3,8 @@ import yaml
 import torch
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from sensor_msgs.msg import CameraInfo
 
@@ -16,6 +16,7 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = CameraInfo
     from_rosmsg_type = CameraInfo
+    time_spec = TimeSpec.STATIC
 
     def __init__(self, device='cpu'):
         super().__init__()
@@ -58,20 +59,20 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
-        save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
+        save_fp = os.path.join(base_dir, "data.txt".format(idx))
         np.savetxt(save_fp, self.intrinsics.cpu().numpy().flatten())
 
     def from_kitti(base_dir, idx, device='cpu'):
         res = IntrinsicsTorch(device=device)
 
-        fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
+        fp = os.path.join(base_dir, "data.txt".format(idx))
         data = np.loadtxt(fp).reshape(3, 3)
 
         res.intrinsics = torch.tensor(data).float().to(device)
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        res.frame_id = read_info_file(base_dir,  'frame_id')
 
         return res
 
@@ -113,6 +114,7 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = CameraInfo
     from_rosmsg_type = CameraInfo
+    time_spec = TimeSpec.STATIC
 
     def __init__(self, device='cpu'):
         super().__init__()
@@ -161,10 +163,10 @@ class CameraInfoTorch(TorchCoordinatorDataType):
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
 
         # Save as YAML for better human readability and to preserve all info
-        save_fp = os.path.join(base_dir, "{:08d}.yaml".format(idx))
+        save_fp = os.path.join(base_dir, "data.yaml")
         data = {
             'k': self.k.cpu().numpy().tolist(),
             'd': self.d.cpu().numpy().tolist(),
@@ -180,7 +182,7 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     def from_kitti(base_dir, idx, device='cpu'):
         res = CameraInfoTorch(device=device)
 
-        fp = os.path.join(base_dir, "{:08d}.yaml".format(idx))
+        fp = os.path.join(base_dir, "data.yaml".format(idx))
         with open(fp, 'r') as f:
             data = yaml.safe_load(f)
 
@@ -193,7 +195,7 @@ class CameraInfoTorch(TorchCoordinatorDataType):
         res.height = data['height']
         
         res.stamp = read_timestamp_file(base_dir, idx)
-        res.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        res.frame_id = read_info_file(base_dir,  'frame_id')
 
         return res
 
