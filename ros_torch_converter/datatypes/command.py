@@ -2,6 +2,8 @@ import os
 import torch
 import numpy as np
 
+from tartandriver_utils.geometry_utils import MultiDimensionalInterpolator
+
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
@@ -15,6 +17,33 @@ class CommandTorch(TorchCoordinatorDataType):
     to_rosmsg_type = TwistStamped
     from_rosmsg_type = TwistStamped
     time_spec = TimeSpec.INTERP
+
+    ##for now all interpolables have a few extra interfaces
+    def to_interp(base_dir, cmdlist):
+        data = torch.stack([x.state for x in cmdlist], dim=0).cpu().numpy()
+        times = np.array([x.stamp for x in cmdlist])
+
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        np.savetxt(data_fp, data)
+        np.savetxt(timestamp_fp, times)
+    
+    def from_interp(base_dir, target_timestamp, device, tol=0.5):
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        data = np.loadtxt(data_fp).reshape(-1, 2)
+        timestamps = np.loadtxt(timestamp_fp)
+
+        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, tol=tol)
+        data = interp(target_timestamp)
+
+        out = CommandTorch.from_numpy(data).to(device)
+        out.stamp = target_timestamp
+        out.frame_id = read_info_file(base_dir,  'frame_id')
+
+        return out
     
     def __init__(self, device='cpu'):
         super().__init__()

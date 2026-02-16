@@ -4,6 +4,8 @@ import numpy as np
 
 from scipy.spatial.transform import Rotation as R
 
+from tartandriver_utils.geometry_utils import TrajectoryInterpolator
+
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
@@ -17,6 +19,34 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
     time_spec = TimeSpec.INTERP
+    
+    ##for now all interpolables have a few extra interfaces
+    def to_interp(base_dir, cmdlist):
+        data = torch.stack([x.state for x in cmdlist], dim=0).cpu().numpy()
+        times = np.array([x.stamp for x in cmdlist])
+
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        np.savetxt(data_fp, data)
+        np.savetxt(timestamp_fp, times)
+    
+    def from_interp(base_dir, target_timestamp, device, tol=0.5):
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        data = np.loadtxt(data_fp).reshape(-1, 13)
+        timestamps = np.loadtxt(timestamp_fp)
+
+        interp = TrajectoryInterpolator(traj=data, times=timestamps, tol=tol)
+        data = interp(target_timestamp)
+
+        child_frame_id = read_info_file(base_dir,  'child_frame_id')
+        out = OdomRBStateTorch.from_numpy(data, child_frame_id).to(device)
+        out.stamp = target_timestamp
+        out.frame_id = read_info_file(base_dir,  'frame_id')
+
+        return out
 
     def __init__(self, device='cpu'):
         super().__init__()

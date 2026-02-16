@@ -1,6 +1,13 @@
-- name: gps_odom
+- name: novatel_gps_odom
   group: sensors
   topic: /odometry/filtered_odom
   type: OdomRBState
+  max_age: 1.
+  args: {}
+
+- name: novatel_imu
+  group: sensors
+  topic: /novatel/imu/data
+  type: Imu
   max_age: 1.
   args: {}

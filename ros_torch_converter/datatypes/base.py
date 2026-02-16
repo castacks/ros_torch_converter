@@ -1,6 +1,12 @@
 import abc
 import enum
 
+INTERPOLATION_TYPES = set([
+    'MATCH_TARGET',
+    'UNCHANGED',
+    'MATCH_TOPIC'
+])
+
 class TimeSpec(enum.Enum):
     """
     Enum for various data storage methods

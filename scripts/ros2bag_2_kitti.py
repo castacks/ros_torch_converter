@@ -179,12 +179,6 @@ if __name__ == '__main__':
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
 
-            ##add interp timestamps
-            if topic in topics_to_interp:
-                interp_buf[topic].append(msg_time)
-
-    interp_buf = {k:np.array(v) for k,v in interp_buf.items()}
-
     #update the tf tree
     frame_list = list(frame_list)
     has_calib_file = False
@@ -291,6 +285,7 @@ if __name__ == '__main__':
     # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
     # import sys
     pbars = {k:tqdm.tqdm(desc=k, total=all_valid_mask.sum(), position=i) for i,k in enumerate(cvt_info.keys())}
+    interp_buf = {k:[] for k in topics_to_interp}
 
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         #TODO cleanup as postproc
@@ -332,20 +327,16 @@ if __name__ == '__main__':
                 ## handle interp data
                 if topic in topics_to_interp:
                     torch_data = torch_dtype.from_rosmsg(msg)
+                    torch_data.stamp = msg_time
 
-                    target_diffs = np.abs(interp_buf[topic] - msg_time)
-                    idxs = np.argwhere(target_diffs < 1e-16).flatten()
-                    for idx in idxs:
-                        torch_data.to_kitti_interp(base_dir, idx)
+                    if (len(interp_buf[topic]) == 0) or (msg_time - interp_buf[topic][-1].stamp > 1e-16):
+                        interp_buf[topic].append(torch_data)
 
                 ## handle sync data
                 target_diffs = np.abs(queue['topic_times'][topic] - msg_time)
                 idxs = np.argwhere(target_diffs < 1e-16).flatten()
 
                 if len(idxs) > 0:
-    #                print('topic {} msg for frames {}'.format(topic, idxs))
-                    # print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
-
                     checks[topic].append(idxs)
 
                     torch_data = torch_dtype.from_rosmsg(msg)
@@ -370,11 +361,23 @@ if __name__ == '__main__':
 
                     for idx in idxs:
                         torch_data.to_kitti(base_dir, idx)
-                        pbars[_ckey].update()
+                        pbars[_ckey].n = idx
+                        pbars[_ckey].refresh()
 
     for pbar in pbars.values():
-        pbar.close()
-        
+        pbar.close()    
+
+    #handle interpolated data
+    for cname, cinfo in cvt_info.items():
+        if cinfo['topic'] in topics_to_interp:
+            cvt_type = str_to_cvt_class[cinfo['msgtype']]
+            base_dir = cinfo['dir']
+            interp_data = interp_buf[cinfo['topic']]
+
+            print(f"make interp data for dir {base_dir} from topic {cinfo['topic']} ({len(interp_data)} msgs)")
+            cvt_type.to_interp(base_dir, interp_data)
+
+
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
 

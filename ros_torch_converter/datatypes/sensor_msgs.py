@@ -8,6 +8,8 @@ from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
+from tartandriver_utils.geometry_utils import MultiDimensionalInterpolator, IMU_MASK
+
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import (
     update_info_file,
@@ -16,13 +18,42 @@ from ros_torch_converter.utils import (
     read_timestamp_file,
 )
 
-
 class ImuTorch(TorchCoordinatorDataType):
     """TorchCoordinator class for IMU messages"""
 
     from_rosmsg_type = Imu
     to_rosmsg_type = Imu
     time_spec = TimeSpec.INTERP
+
+    def to_interp(base_dir, imulist):
+        ori = torch.stack([x.orientation for x in imulist], dim=0)
+        angvel = torch.stack([x.angular_velocity for x in imulist], dim=0)
+        linacc = torch.stack([x.linear_acceleration for x in imulist], dim=0)
+
+        data = torch.cat([ori, angvel, linacc], dim=-1).cpu().numpy()
+        times = np.array([x.stamp for x in imulist])
+
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        np.savetxt(data_fp, data)
+        np.savetxt(timestamp_fp, times)
+    
+    def from_interp(base_dir, target_timestamp, device, tol=0.5):
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        data = np.loadtxt(data_fp).reshape(-1, 10)
+        timestamps = np.loadtxt(timestamp_fp)
+
+        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, mask=IMU_MASK, tol=tol)
+        data = interp(target_timestamp)
+
+        out = ImuTorch.from_numpy(data).to(device)
+        out.stamp = target_timestamp
+        out.frame_id = read_info_file(base_dir,  'frame_id')
+
+        return out
 
     def __init__(self, device="cpu"):
         super().__init__()
@@ -66,6 +97,13 @@ class ImuTorch(TorchCoordinatorDataType):
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
+    
+    def from_numpy(data, device='cpu'):
+        out = ImuTorch()
+        out.orientation = torch.tensor(data[:4], dtype=torch.bool, device=device)
+        out.angular_velocity = torch.tensor(data[4:7], dtype=torch.bool, device=device)
+        out.linear_acceleration = torch.tensor(data[7:10], dtype=torch.bool, device=device)
+        return out
 
     def to_kitti(self, base_dir, idx):
         """
@@ -90,6 +128,32 @@ class ImuTorch(TorchCoordinatorDataType):
             [self.orientation, self.angular_velocity, self.linear_acceleration]
         )
         data[idx] = imu_data.cpu().numpy()
+
+        np.savetxt(save_fp, data)
+
+    def to_kitti_interp(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        self.save_to_file(base_dir, idx, file='interp_data.txt')
+
+    def save_to_file(self, base_dir, idx, file='data.txt'):
+        save_fp = os.path.join(base_dir, file)
+        if not os.path.exists(save_fp):
+            data = float('inf') * np.ones([idx+1, 10])
+        else:
+            #need to reshape for 1-row data
+            data = np.loadtxt(save_fp).reshape(-1, 10)
+
+        if data.shape[0] < (idx+1):
+            data_new = float('inf') * np.ones([idx+1, 10])
+            data_new[:data.shape[0]] = data
+            data = data_new
+
+        data[idx] = torch.cat([
+            self.orientation,
+            self.angular_velocity,
+            self.linear_acceleration
+        ]).cpu().numpy()
 
         np.savetxt(save_fp, data)
 

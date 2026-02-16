@@ -1,0 +1,42 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  topics: !listcat
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/multisense_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml
+
+    - 
+      - name: steer_angle
+        group: controls
+        topic: /talon/current_position
+        type: Float32
+        args: {}
+
+      - name: command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}
+
+      - name: teleop_command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}
+
+      - name: auto_command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}
