@@ -13,6 +13,7 @@ from geometry_msgs.msg import Point
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 
+
 class MarkerArrayTorch(TorchCoordinatorDataType):
     """
     Torch wrapper for visualization_msgs/MarkerArray.
@@ -38,6 +39,8 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
         self.scales = torch.zeros(0, 3, device=device)
         self.types = torch.zeros(0, dtype=torch.long, device=device)
         self.ns = []  # list of strings
+
+        self.orientations = None
 
         # ROS metadata
         self.frame_id = ""
@@ -178,6 +181,16 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                 m.pose.position.y = float(pt[1])
                 m.pose.position.z = float(pt[2])
                 m.pose.orientation.w = 1.0
+
+            if self.orientations[i] is not None:
+                q = self.orientations[i]
+                m.pose.orientation.x = float(q[0])
+                m.pose.orientation.y = float(q[1])
+                m.pose.orientation.z = float(q[2])
+                m.pose.orientation.w = float(q[3])
+            else:
+                m.pose.orientation.w = 1.0
+
 
             msg.markers.append(m)
 
