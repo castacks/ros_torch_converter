@@ -265,7 +265,7 @@ def process_topic_wrapper(args_tuple):
 
                         base_dir = os.path.join(args.dst_dir, name)
                         for idx in idxs:
-                            if torch_data.stamp == -1:
+                            if args.fill_missing_stamps and torch_data.stamp == -1:
                                 torch_data.stamp = topic_times[idx]
                             torch_data.to_kitti(base_dir, idx)
                             
@@ -302,6 +302,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_plot', action='store_true', help='set this flag to not display the plot')
     parser.add_argument('--force', action='store_true', help='dont ask to overwrite')
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
+    parser.add_argument('--fill_missing_stamps', action='store_true', help='set this flag to use bag time for any data which does not have stamps')
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--num_workers', type=str, default=None, help='number of parallel workers (default: min of topics and CPU cores, or "max" to use all CPU cores)')
@@ -371,7 +372,7 @@ if __name__ == '__main__':
     frame_list = list(frame_list)
 
     # temp broken rtk transform fix
-    temp_ignore = ['gq7_imu_link', 'earth']
+    temp_ignore = ['gq7_imu_link', 'earth', 'gps_frame', 'map', 'multisense/left_camera_optical_frame']
     for fr in temp_ignore:
         if fr in frame_list:
             frame_list.remove(fr)
