@@ -1,6 +1,9 @@
 import os
 import yaml
 import argparse
+import copy
+import time
+from datetime import timedelta
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,6 +14,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
 from tartandriver_utils.ros_utils import stamp_to_time
+from tartandriver_utils.os_utils import load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
@@ -23,14 +27,14 @@ General algo is something like this:
     2. Then do another pass through to actually convert messages, etc
 """
 
-def setup_queue(reader, config):
+def setup_queue(reader, topics, dt):
     """
     Initialize message queues based on config
     """
     start_time = reader.start_time * 1e-9
     end_time = reader.end_time * 1e-9
 
-    target_times = np.arange(start_time, end_time, config['dt'])
+    target_times = np.arange(start_time, end_time, dt)
 
     queue = {
         'target_times': target_times,
@@ -38,24 +42,57 @@ def setup_queue(reader, config):
         'topic_error': {},
     }
 
-    for topic_data in config['topics']:
-        queue['topic_times'][topic_data['topic']] = -np.ones(len(target_times))
-        queue['topic_error'][topic_data['topic']] = float('inf') * np.ones(len(target_times))
-
+    for topic in topics:
+        queue['topic_times'][topic] = -np.ones(len(target_times))
+        queue['topic_error'][topic] = float('inf') * np.ones(len(target_times))
+    
     return queue
 
-def check_connections(connections, target_topics):
+def get_filtered_config(connections, config):
     """
-    Check that all topics in target_topics in connections
+    Check all required topics in the config are present in connections.
+    
+    Returns:
+        filtered_config: in format {'topic': {kwargs}, ...}.
     """
-    valid = True
     connection_topics = [x.topic for x in connections]
-    for topic in target_topics:
+    missing_topics = []
+    filtered_config = {}
+    for topic_cfg in config['topics']:
+        topic = topic_cfg['topic']
         if topic not in connection_topics:
-            print('bag missing config topic {}!'.format(topic))
-            valid = False
+            if not topic_cfg.get('optional'):
+                missing_topics.append(topic)
+        else:
+            filtered_config[topic] = copy.deepcopy(topic_cfg)
+            del filtered_config[topic]['topic'] # redundant
+    
+    assert not missing_topics, "Bag missing config required topics: {}".format(missing_topics)
 
-    return valid
+    return filtered_config
+
+def check_missing_types(config):
+    """
+    Check all types listed in the config exist
+    """
+    missing_types = []
+    for topic_data in config["topics"]:
+        msg_type = topic_data["type"]
+        if msg_type not in str_to_cvt_class:
+            missing_types.append((topic_data["topic"], msg_type))
+    
+    if missing_types:
+        print("\nERROR: Missing converters for the following message types:")
+        for topic, msg_type in missing_types:
+            print(f"  Topic: {topic}")
+            print(f"  Type: {msg_type}")
+        print("\nAvailable converters:")
+        for msg_type in sorted(str_to_cvt_class.keys()):
+            print(f"  - {msg_type}")
+        print("\nPlease add the missing types to str_to_cvt_class in converter.py")
+        exit(1)
+    
+    print("All message types have converters available ✓")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -76,30 +113,12 @@ if __name__ == '__main__':
         if x == 'n':
             exit(0)
 
-    config = yaml.safe_load(open(args.config, 'r'))
-    target_topics = [x['topic'] for x in config['topics']]
-    topic_to_msgtype = {x['topic']:x['type'] for x in config['topics']}
-    topic_to_name = {x['topic']:x['name'] for x in config['topics']}
+    config = load_yaml(args.config)
+    dt = config['dt']
+    all_topics = [x['topic'] for x in config['topics']]
 
     # Check for missing message type converters upfront
-    missing_types = []
-    for topic_data in config["topics"]:
-        msg_type = topic_data["type"]
-        if msg_type not in str_to_cvt_class:
-            missing_types.append((topic_data["topic"], msg_type))
-    
-    if missing_types:
-        print("\nERROR: Missing converters for the following message types:")
-        for topic, msg_type in missing_types:
-            print(f"  Topic: {topic}")
-            print(f"  Type: {msg_type}")
-        print("\nAvailable converters:")
-        for msg_type in sorted(str_to_cvt_class.keys()):
-            print(f"  - {msg_type}")
-        print("\nPlease add the missing types to str_to_cvt_class in converter.py")
-        exit(1)
-    
-    print("All message types have converters available ✓")
+    check_missing_types(config)
 
     bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
 
@@ -115,21 +134,22 @@ if __name__ == '__main__':
 
     print('checking timestamps...')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
-        connections = [x for x in reader.connections if x.topic in target_topics]
+        connections = [x for x in reader.connections if x.topic in all_topics]
 
-        assert check_connections(connections, target_topics), "missing topics"
+        # update target topics to be only valid topics
+        topic_config = get_filtered_config(connections, config)
+        target_topics = [k for k in topic_config]
 
-        queue = setup_queue(reader, config)
+        queue = setup_queue(reader, target_topics, dt)
 
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
 
+            msg_time = timestamp * 1e-9
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
                 frame_list.add(msg.header.frame_id)
-            else:
-                msg_time = timestamp * 1e-9
 
             if hasattr(msg, "child_frame_id"):
                 frame_list.add(msg.child_frame_id)
@@ -146,6 +166,13 @@ if __name__ == '__main__':
 
     #update the tf tree
     frame_list = list(frame_list)
+
+    # temp broken rtk transform fix
+    temp_ignore = ['gq7_imu_link', 'earth']
+    for fr in temp_ignore:
+        if fr in frame_list:
+            frame_list.remove(fr)
+
     has_calib_file = False
     if 'calib_file' in config.keys():
         print('applying calib file from config...')
@@ -183,7 +210,7 @@ if __name__ == '__main__':
     for topic, times in queue['topic_times'].items():
         all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
 
-    assert all_valid_mask.any(), "topics not sync'ed!"
+    assert all_valid_mask.any(), "Topics not sync'ed!"
 
     queue['target_times'] = queue['target_times'][all_valid_mask]
 
@@ -198,9 +225,8 @@ if __name__ == '__main__':
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
-    for topic_config in config['topics']:
-        topic = topic_config['topic']
-        topic_dir = os.path.join(args.dst_dir, topic_config['name'])
+    for topic, cfg in topic_config.items():
+        topic_dir = os.path.join(args.dst_dir, cfg['name'])
         os.makedirs(topic_dir, exist_ok=True)
 
         np.savetxt(os.path.join(topic_dir, 'timestamps.txt'), queue['topic_times'][topic])
@@ -268,12 +294,12 @@ if __name__ == '__main__':
         
         connections = [x for x in reader.connections if x.topic in target_topics]
 
-        assert check_connections(connections, target_topics), "missing topics"
-
+        start = time.time()
+        last_idx = -1
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
-            name = topic_to_name[topic]
+            name = topic_config[topic]['name']
 
             if hasattr(msg, "header") and not args.use_bag_time:
                 msg_time = stamp_to_time(msg.header.stamp)
@@ -284,15 +310,22 @@ if __name__ == '__main__':
             idxs = np.argwhere(target_diffs < 1e-8).flatten()
 
             if len(idxs) > 0:
+                last_idx = max(last_idx, idxs[0].item())
+                dur = time.time()-start
 #                print('topic {} msg for frames {}'.format(topic, idxs))
-                print('proc idx {}/{}'.format(idxs[0].item(), n_frames), end='\r')
+                rate = last_idx/dur
+                if rate > 0:
+                    time_left = (n_frames-last_idx)/rate
+                else:
+                    time_left = 0
+                print('proc idx {}/{}, Avg {:.1f} Samp/s, Time left: {}'.format(idxs[0].item(), n_frames, rate, timedelta(seconds=int(time_left))), end='\r')
                 checks[topic].append(idxs)
 
-                torch_dtype = str_to_cvt_class[topic_to_msgtype[topic]]
+                torch_dtype = str_to_cvt_class[topic_config[topic]['type']]
                 
                 camera_info_torch = None
                 # Check if we should rectify this image
-                if args.rectify and 'CompressedImage' in topic_to_msgtype[topic]:
+                if args.rectify and 'CompressedImage' in topic_config[topic]['type']:
                     # Try to find a matching camera_info topic
                     # Assume camera_info topic is same base topic with /camera_info suffix
                     base_topic = topic.replace('/image_raw/compressed', '').replace('/compressed', '')
@@ -309,7 +342,16 @@ if __name__ == '__main__':
 
                 base_dir = os.path.join(args.dst_dir, name)
                 for idx in idxs:
+                    # Default stamp to tf stamp if no stamp data in message
+                    # (like default ROS messages e.g. Float32)
+                    if torch_data.stamp == -1:
+                        torch_data.stamp = queue['topic_times'][topic][idx]
                     torch_data.to_kitti(base_dir, idx)
+    
+    dur = time.time()-start
+    rate = n_frames/dur
+    time_left = dur
+    print('proc idx {}/{}, Avg {:.1f} Samp/s, Total time: {}'.format(n_frames, n_frames, rate, timedelta(seconds=int(time_left))))
 
     ## check that all idxs got filled
     checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}

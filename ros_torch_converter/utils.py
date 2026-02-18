@@ -47,10 +47,11 @@ def update_timestamp_file(base_dir, idx, stamp):
             temp_timestamps[:timestamps.shape[0]] = timestamps
             temp_timestamps[idx] = stamp
             timestamps = temp_timestamps
+        else:
+            timestamps[idx] = stamp
     else:
         timestamps = -np.ones(idx+1)
-
-    timestamps[idx] = stamp
+        timestamps[idx] = stamp
 
     np.savetxt(timestamp_fp, timestamps)
 
