@@ -288,23 +288,22 @@ if __name__ == '__main__':
     interp_buf = {k:[] for k in topics_to_interp}
 
     with AnyReader([bagpath], default_typestore=typestore) as reader:
-        #TODO cleanup as postproc
         # If rectification is requested, collect camera_info messages
-        # if args.rectify:
-        #     # Cache for camera_info messages
-        #     camera_info_cache = {}
-        #     camera_info_topics = [topic for topic in target_topics if 'camera_info' in topic]
-        #     if camera_info_topics:
-        #         print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
-        #         camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
-        #         for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
-        #             msg = reader.deserialize(rawdata, connection.msgtype)
-        #             # Convert to CameraInfoTorch for rectification
-        #             camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
-        #             camera_info_cache[connection.topic] = camera_info_torch
-        #         print(f"Cached {len(camera_info_cache)} camera_info messages")
-        #     else:
-        #         print("WARNING: --rectify flag set but no camera_info topics found in bag!")
+        if args.rectify:
+            # Cache for camera_info messages
+            camera_info_cache = {}
+            camera_info_topics = [topic for topic in target_topics if 'camera_info' in topic]
+            if camera_info_topics:
+                print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
+                camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
+                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    # Convert to CameraInfoTorch for rectification
+                    camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
+                    camera_info_cache[connection.topic] = camera_info_torch
+                print(f"Cached {len(camera_info_cache)} camera_info messages")
+            else:
+                print("WARNING: --rectify flag set but no camera_info topics found in bag!")
         
         connections = [x for x in reader.connections if x.topic in target_topics]
 
@@ -341,23 +340,22 @@ if __name__ == '__main__':
 
                     torch_data = torch_dtype.from_rosmsg(msg)
                     
-                    #TODO move to separate postproc
-                    # camera_info_torch = None
-                    # # Check if we should rectify this image
-                    # if args.rectify and 'CompressedImage' in topic_to_msgtype[topic]:
-                    #     # Try to find a matching camera_info topic
-                    #     # Assume camera_info topic is same base topic with /camera_info suffix
-                    #     base_topic = topic.replace('/image_raw/compressed', '').replace('/compressed', '')
-                    #     camera_info_topic = base_topic + '/camera_info'
-                    #     camera_info_torch = camera_info_cache.get(camera_info_topic, None)
-                    #     if camera_info_torch is None:
-                    #         print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
+                    camera_info_torch = None
+                    # Check if we should rectify this image
+                    if args.rectify and _cinfo['msgtype'] == 'CompressedImage':
+                        # Try to find a matching camera_info topic
+                        # Assume camera_info topic is same base topic with /camera_info suffix
+                        base_topic = topic.replace('/image_raw/compressed', '').replace('/image/compressed', '').replace('/compressed', '')
+                        camera_info_topic = base_topic + '/camera_info'
+                        camera_info_torch = camera_info_cache.get(camera_info_topic, None)
+                        if camera_info_torch is None:
+                            print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
                     
-                    # # Convert message with optional rectification
-                    # if camera_info_torch is not None:
-                    #     torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
-                    # else:
-                    #     torch_data = torch_dtype.from_rosmsg(msg)
+                    # Convert message with optional rectification
+                    if camera_info_torch is not None:
+                        torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
+                    else:
+                        torch_data = torch_dtype.from_rosmsg(msg)
 
                     for idx in idxs:
                         torch_data.to_kitti(base_dir, idx)
