@@ -1,0 +1,29 @@
+- name: steer_angle
+  group: controls
+  topic: /talon/current_position
+  type: Float32
+  args:
+    interpolation:
+      type: MATCH_TOPIC #UNCHANGED/MATCH_TOPIC/MATCH_TARGET
+      topic: super_odometry/odometry
+
+- name: command
+  group: controls
+  topic: /mux/cmd
+  type: Command
+  args: 
+    interpolation:
+      type: MATCH_TOPIC
+      topic: super_odometry/odometry
+
+# - name: teleop_command
+#   group: controls
+#   topic: /teleop_cmd
+#   type: Command
+#   args: {}
+
+# - name: auto_command
+#   group: controls
+#   topic: /auto_cmd
+#   type: Command
+#   args: {}

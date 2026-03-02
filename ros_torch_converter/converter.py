@@ -90,22 +90,24 @@ class ROSTorchConverter(Node):
         sync_groups = self.config.get("sync_topics", [])
         
         for topic_conf in self.config["topics"]:
-            self.data[topic_conf["name"]] = None
-            self.data_times[topic_conf["name"]] = -1.0
-            self.converters[topic_conf["name"]] = str_to_cvt_class[topic_conf["type"]]
+            tname = f"{topic_conf['group']}/{topic_conf['name']}"
+            self.data[tname] = None
+            self.data_times[tname] = -1.0
+            self.converters[tname] = str_to_cvt_class[topic_conf["type"]]
 
         if sync_groups:
             self._setup_synchronized_subscribers(sync_groups)
         
         for topic_conf in self.config["topics"]:
-            if topic_conf["name"] not in self.synced_topics:
+            tname = f"{topic_conf['group']}/{topic_conf['name']}"
+            if tname not in self.synced_topics:
                 sub = self.create_subscription(
-                    self.converters[topic_conf["name"]].from_rosmsg_type, # Message type
+                    self.converters[tname].from_rosmsg_type, # Message type
                     topic_conf["topic"], # Topic name
                     lambda msg, topic_conf=topic_conf: self.handle_msg(msg, topic_conf),
                     qos_profile=qos_profile_sensor_data,
                 )
-                self.subscribers[topic_conf["name"]] = sub
+                self.subscribers[tname] = sub
 
     def _setup_synchronized_subscribers(self, sync_groups):
         for sync_config in sync_groups:
@@ -140,21 +142,23 @@ class ROSTorchConverter(Node):
                 sync.registerCallback(lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(msgs, configs))
 
     def handle_msg(self, msg, topic_conf):
+        tname = f"{topic_conf['group']}/{topic_conf['name']}"
         if not self.lock:
-            self.data[topic_conf["name"]] = msg
+            self.data[tname] = msg
             try:
-                self.data_times[topic_conf["name"]] = stamp_to_time(msg.header.stamp)
+                self.data_times[tname] = stamp_to_time(msg.header.stamp)
             except:
-                self.data_times[topic_conf["name"]] = stamp_to_time(self.get_clock().now().to_msg())
+                self.data_times[tname] = stamp_to_time(self.get_clock().now().to_msg())
 
     def handle_synchronized_msgs(self, msgs, topic_configs):
+        tname = f"{topic_conf['group']}/{topic_conf['name']}"
         if not self.sync_lock:
             for msg, topic_conf in zip(msgs, topic_configs):
-                self.data[topic_conf["name"]] = msg
+                self.data[tname] = msg
                 try:
-                    self.data_times[topic_conf["name"]] = stamp_to_time(msg.header.stamp)
+                    self.data_times[tname] = stamp_to_time(msg.header.stamp)
                 except:
-                    self.data_times[topic_conf["name"]] = stamp_to_time(self.get_clock().now().to_msg())
+                    self.data_times[tname] = stamp_to_time(self.get_clock().now().to_msg())
 
     def get_data(self, return_times=False, device="cpu"):
         self.lock = True
@@ -162,7 +166,8 @@ class ROSTorchConverter(Node):
         data = {}
 
         for topic_conf in self.config["topics"]:
-            tname = topic_conf["name"]
+            tname = f"{topic_conf['group']}/{topic_conf['name']}"
+            
             cvt = self.converters[tname]
             msg = self.data[tname]
             msg_torch = cvt.from_rosmsg(msg, device=self.device, **topic_conf["args"])
@@ -178,10 +183,10 @@ class ROSTorchConverter(Node):
     def can_get_data(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
 
-        for topic_config in self.config["topics"]:
-            max_age = topic_config["max_age"]
-            topic_name = topic_config["name"]
-            data_time = self.data_times[topic_name]
+        for topic_conf in self.config["topics"]:
+            tname = f"{topic_conf['group']}/{topic_conf['name']}"
+            max_age = topic_conf["max_age"]
+            data_time = self.data_times[tname]
 
             if curr_time - data_time > max_age or data_time < 0.0:
                 return False
@@ -192,10 +197,11 @@ class ROSTorchConverter(Node):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
         out = "\n ---converter status--- \n"
         for topic_conf in self.config["topics"]:
-            data_exists = self.data[topic_conf["name"]] is not None
-            data_age = curr_time - self.data_times[topic_conf["name"]]
+            tname = f"{topic_conf['group']}/{topic_conf['name']}"
+            data_exists = self.data[tname] is not None
+            data_age = curr_time - self.data_times[tname]
             out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
-                topic_conf["name"] + " " + topic_conf["topic"] + ":",
+                tname + " " + topic_conf["topic"] + ":",
                 data_exists,
                 data_age,
             )
