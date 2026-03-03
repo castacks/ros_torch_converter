@@ -519,13 +519,13 @@ class FFCStatusTorch:
         
         
         stamp = read_timestamp_file(base_dir, idx)
-        frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        frame_id = read_info_file(base_dir, 'frame_id')
 
         return cls(status, stamp, frame_id)
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
         
         data_file = os.path.join(base_dir, "data.txt")
         

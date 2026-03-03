@@ -22,6 +22,7 @@ from ros_torch_converter.datatypes.pointcloud import (
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
+from ros_torch_converter.datatypes.path import PathTorch
 from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.sensor_msgs import (
     ImuTorch,
@@ -51,6 +52,7 @@ str_to_cvt_class = {
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
+    "Path": PathTorch,
     "VoxelGrid": VoxelGridTorch,
     "Imu": ImuTorch,
     "NavSatFix": NavSatFixTorch,

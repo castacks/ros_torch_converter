@@ -103,7 +103,7 @@ class GoalArrayTorch(TorchCoordinatorDataType):
 
     def to(self, device):
         self.device = device
-        self.data = self.data.to(device)
+        self.goals = self.goals.to(device)
         return self
 
     def __repr__(self):
