@@ -172,7 +172,9 @@ class ROSTorchConverter(Node):
             
             cvt = self.converters[tname]
             msg = self.data[tname]
-            msg_torch = cvt.from_rosmsg(msg, device=self.device, **topic_conf["args"])
+            #TODO probably need to actually support interpolation here
+            args = {k:v for k,v in topic_conf['args'].items() if k != 'interpolation'}
+            msg_torch = cvt.from_rosmsg(msg, device=self.device, **args)
             data[tname] = msg_torch
 
         # data = {k: self.converters[k].from_rosmsg(msg, device=self.device, **self.config["topics"][k]["args"]) for k, msg in self.data.items()}
