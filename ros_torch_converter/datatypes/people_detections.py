@@ -2,26 +2,25 @@ import torch
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
-from geometry_msgs.msg import Pose
 
 # Import the TrackedHumanArray message (Required)
 try:
-    from human_tracker_msgs.msg import TrackedHumanArray, TrackedHuman
+    from humanflow_msgs.msg import TrackedHumanArray, TrackedHuman
 except ImportError as e:
     raise ImportError(
-        "human_tracker_msgs messages not found. You must install the human_tracker_msgs package "
-        "to use PeopleDetections. Build the human_tracker_msgs package in your workspace."
+        "humanflow_msgs messages not found. You must install the humanflow_msgs package "
+        "to use PeopleDetections. Build the humanflow_msgs package in your workspace."
     ) from e
 
 
 class PeopleDetectionsTorch(TorchCoordinatorDataType):
     """
-    Torch datatype for people detections from the human_tracker package
+    Torch datatype for people detections from the humanflow package
     
     Stores 3D positions of detected people along with additional tracking information
     like tracking IDs, velocities (if available), confidence scores, etc.
     
-    Message type: TrackedHumanArray from human_tracker package
+    Message type: TrackedHumanArray from humanflow package
     """
     to_rosmsg_type = TrackedHumanArray
     from_rosmsg_type = TrackedHumanArray
@@ -42,7 +41,7 @@ class PeopleDetectionsTorch(TorchCoordinatorDataType):
         Convert TrackedHumanArray message to PeopleDetectionsTorch
         
         Args:
-            msg: TrackedHumanArray message from human_tracker
+            msg: TrackedHumanArray message from humanflow
             device: torch device ('cpu' or 'cuda')
         
         Returns:
@@ -59,23 +58,23 @@ class PeopleDetectionsTorch(TorchCoordinatorDataType):
         position_errors = []
         
         for human in msg.humans:
-            # Extract position from Pose
+            # Extract position from ground contact point
             positions.append([
-                human.pose.position.x,
-                human.pose.position.y,
-                human.pose.position.z
+                human.ground_contact_point.x,
+                human.ground_contact_point.y,
+                human.ground_contact_point.z
             ])
             
             # Extract tracking metadata
-            tracking_ids.append(human.tracking_id)
+            tracking_ids.append(human.person_id)
             confidences.append(human.confidence)
-            detection_counts.append(human.detection_count)
+            detection_counts.append(human.measurements_count)
             
-            # Extract size [width, depth, height]
-            sizes.append(human.size)
+            # Size not provided in this TrackedHuman schema
+            sizes.append([0.0, 0.0, 0.0])
             
-            # Extract position uncertainty
-            position_errors.append(human.position_error)
+            # Position uncertainty not provided in this TrackedHuman schema
+            position_errors.append([0.0, 0.0, 0.0])
         
         if positions:
             res.positions = torch.tensor(positions, dtype=torch.float32, device=device)
@@ -130,22 +129,18 @@ class PeopleDetectionsTorch(TorchCoordinatorDataType):
         
         for i, pos in enumerate(positions_np):
             human = TrackedHuman()
-            human.tracking_id = int(tracking_ids_np[i])
+            human.person_id = int(tracking_ids_np[i])
             human.confidence = float(confidences_np[i])
-            human.detection_count = int(detection_counts_np[i])
+            human.measurements_count = int(detection_counts_np[i])
             
-            # Position
-            human.pose = Pose()
-            human.pose.position.x = float(pos[0])
-            human.pose.position.y = float(pos[1])
-            human.pose.position.z = float(pos[2])
-            human.pose.orientation.w = 1.0  # Identity orientation (Default)
+            # Ground contact point
+            human.ground_contact_point.x = float(pos[0])
+            human.ground_contact_point.y = float(pos[1])
+            human.ground_contact_point.z = float(pos[2])
             
-            # Size and errors
-            human.size = sizes_np[i].tolist()
-            human.position_error = position_errors_np[i].tolist()
-            human.size_error = [0.0, 0.0, 0.0]  # Default
-            human.shape_type = 0  # Default (TARGET_SHAPE_CUBE)
+            # Unused in this schema; keep tensor reads for shape consistency
+            _ = sizes_np[i]
+            _ = position_errors_np[i]
             
             msg.humans.append(human)
         
