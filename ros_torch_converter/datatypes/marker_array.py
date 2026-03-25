@@ -2,10 +2,10 @@ import os
 import torch
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import (
-    update_frame_file, update_timestamp_file,
-    read_frame_file, read_timestamp_file
+    update_info_file, update_timestamp_file,
+    read_info_file, read_timestamp_file
 )
 
 from visualization_msgs.msg import Marker, MarkerArray
@@ -23,6 +23,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
 
     to_rosmsg_type = MarkerArray
     from_rosmsg_type = MarkerArray
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device='cpu'):
         super().__init__()
@@ -201,7 +202,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
     # ----------------------------------------------------------------------
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_info_file(base_dir, idx, 'frame_id', self.frame_id)
 
         save_fp = os.path.join(base_dir, f"{idx:08d}.txt")
 
@@ -220,7 +221,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
 
         mat = MarkerArrayTorch.from_torch(pts, cols, scs)
         mat.stamp = read_timestamp_file(base_dir, idx)
-        mat.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        mat.frame_id = read_info_file(base_dir, idx, 'frame_id')
         return mat
 
     def rand_init(device='cpu'):
