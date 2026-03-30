@@ -31,6 +31,7 @@ from ros_torch_converter.datatypes.sensor_msgs import (
     TwistTorch,
     FFCStatusTorch,
 )
+from ros_torch_converter.datatypes.frontier_scores import FrontierScoresTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -59,6 +60,7 @@ str_to_cvt_class = {
     "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
     "TwistStamped": TwistTorch,
     "FFCStatus": FFCStatusTorch,
+    "FrontierScores": FrontierScoresTorch
 }
 
 

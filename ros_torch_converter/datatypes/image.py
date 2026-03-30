@@ -288,7 +288,6 @@ class CompressedImageTorch(ImageTorch):
 
         return rectified_img
 
-
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for images
