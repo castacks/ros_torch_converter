@@ -48,7 +48,7 @@ class FrontierScoresTorch(TorchCoordinatorDataType):
         
         return res
 
-    def from_numpy(scores, headings, binwidth, position, device):
+    def from_numpy(scores, headings, binwidth, position, device='cpu'):
         res = FrontierScoresTorch(device=device)
 
         res.binwidth = binwidth
@@ -58,7 +58,7 @@ class FrontierScoresTorch(TorchCoordinatorDataType):
 
         return res
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(msg, device='cpu'):
         res = FrontierScoresTorch.from_numpy(
             scores = np.array(msg.scores),
             headings = np.array(msg.headings),
