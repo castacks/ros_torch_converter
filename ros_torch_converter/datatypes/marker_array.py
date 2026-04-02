@@ -183,7 +183,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                 m.pose.position.z = float(pt[2])
                 m.pose.orientation.w = 1.0
 
-            if self.orientations[i] is not None:
+            if self.orientations is not None and self.orientations[i] is not None:
                 q = self.orientations[i]
                 m.pose.orientation.x = float(q[0])
                 m.pose.orientation.y = float(q[1])
