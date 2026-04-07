@@ -58,7 +58,13 @@ class PointCloudTorch(TorchCoordinatorDataType):
 
         res = PointCloudTorch(device=device)
         pcl_np = ros2_numpy.numpify(msg)
-        xyz = pcl_np['xyz']
+        # print(
+        #     f"converted ros msg to numpy with fields {pcl_np.dtype.names}",
+        # )
+        # xyz = pcl_np['xyz']
+        xyz = np.stack(
+            [pcl_np["x"].flatten(), pcl_np["y"].flatten(), pcl_np["z"].flatten()], axis=-1
+        )
 
         # Copy the array to ensure strides are compatible with PyTorch
         xyz = np.array(xyz, copy=True)
