@@ -1,19 +1,17 @@
 ---
-  dt: 0.1
+dt: 0.4 # match the rate in just_voxel_mapping_dtc.yaml (1/0.4 = 2.5 Hz)
+interp_tol: 0.5
+backward_interpolation: false
 
-  #allow interpolation up to this many seconds
-  interp_tol: 0.5
+topics:
+  - name: odometry
+    topic: /spot2/base/autonomy/slam/aft_mapped_to_init
+    type: OdomRBState
+    max_age: 1.0
+    args: {}
 
-  #set to true to allow past target times to be filled by future data
-  backward_interpolation: false
-
-  data:
-    - name: odom
-      topic: /spot1/base/autonomy/slam/aft_mapped_to_init
-      type: OdomRBState
-      args: {}
-
-    - name: super_odometry_pc
-      topic: /spot1/base/autonomy/slam/registered_scan
-      type: PointCloud
-      args: {}
+  - name: pointcloud_in_odom
+    topic: /spot2/base/autonomy/slam/registered_scan
+    type: PointCloud
+    max_age: 1.0
+    args: {}
