@@ -1,7 +1,7 @@
 import copy
 
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy, qos_profile_sensor_data
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
@@ -103,11 +103,14 @@ class ROSTorchConverter(Node):
         for topic_conf in self.config["topics"]:
             tname = f"{topic_conf['group']}/{topic_conf['name']}"
             if tname not in self.synced_topics:
+                qos_profile = qos_profile_sensor_data
+                if topic_conf.get('qos'):
+                    qos_profile = self._make_qos_profile(topic_conf['qos'])
                 sub = self.create_subscription(
                     self.converters[tname].from_rosmsg_type, # Message type
                     topic_conf["topic"], # Topic name
                     lambda msg, topic_conf=topic_conf: self.handle_msg(msg, topic_conf),
-                    qos_profile=qos_profile_sensor_data,
+                    qos_profile=qos_profile,
                 )
                 self.subscribers[tname] = sub
 
@@ -142,6 +145,19 @@ class ROSTorchConverter(Node):
                     slop=slop
                 )
                 sync.registerCallback(lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(msgs, configs))
+
+    def _make_qos_profile(self, qos_cfg):
+        qos_profile = qos_profile_sensor_data # start with default
+        # modify as requested
+        if "reliability" in qos_cfg:
+            qos_profile.reliability = getattr(ReliabilityPolicy, qos_cfg["reliability"])
+        if "durability" in qos_cfg:
+            qos_profile.durability = getattr(DurabilityPolicy, qos_cfg["durability"])
+        if "history" in qos_cfg:
+            qos_profile.history = getattr(HistoryPolicy, qos_cfg["history"])
+        if "depth" in qos_cfg:
+            qos_profile.depth = qos_cfg["depth"]
+        return qos_profile
 
     def handle_msg(self, msg, topic_conf):
         tname = f"{topic_conf['group']}/{topic_conf['name']}"
