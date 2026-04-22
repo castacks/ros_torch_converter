@@ -302,12 +302,13 @@ class TfManager:
     
         return tf_manager
 
-    def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu'):
+    def from_rosbag(rosbag_fp, use_bag_time=False, frames=[], dt=0.1, device='cpu'):
         tf_manager = TfManager(device)
 
         bag_fps = sorted([x for x in os.listdir(rosbag_fp) if '.mcap' in x])
 
         #have every frame keep track of tf to its parent
+        search_frames = frames
         frames = {}
 
         bagpath = Path(rosbag_fp)
@@ -327,7 +328,12 @@ class TfManager:
                     src_frame = tf_msg.header.frame_id
                     dst_frame = tf_msg.child_frame_id
                     t = stamp_to_time(tf_msg.header.stamp)
+                    # DELETE DELETE DELETE
+                    # print(f"{src_frame}->{dst_frame}")
 
+                    # DELETE DELETE DELETE
+                    if src_frame not in search_frames:
+                        continue
                     if dst_frame not in frames.keys():
                         frames[dst_frame] = {
                             'frame_id': dst_frame,

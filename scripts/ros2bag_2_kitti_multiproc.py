@@ -372,6 +372,7 @@ if __name__ == '__main__':
     frame_list = list(frame_list)
 
     # temp broken rtk transform fix
+    og_frame_list = frame_list
     temp_ignore = ['gq7_imu_link', 'earth', 'gps_frame', 'map', 'multisense/left_camera_optical_frame']
     for fr in temp_ignore:
         if fr in frame_list:
@@ -398,7 +399,7 @@ if __name__ == '__main__':
         tf_tmax = np.inf
     else:
         print('handling tf...')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+        tf_manager = TfManager.from_rosbag(bagpath, frames=frame_list, device='cuda')
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
