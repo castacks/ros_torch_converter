@@ -1,0 +1,5 @@
+- name: mpc_solution
+  group: controls
+  topic: /mppi/solution
+  type: Solution
+  args: {}

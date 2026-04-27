@@ -7,38 +7,13 @@
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
 
-  data:
-    - name: odom
-      topic: /superodometry/integrated_to_init #namespaced in new bags
-      type: OdomRBState
-      args: {}
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
 
-    - name: gps_odom
-      topic: /odometry/filtered_odom
-      type: OdomRBState
-      args: {}
-
-    - name: local_navmap
-      topic: /local_navmap
-      type: BEVGrid
-      args: {}
-
-    - name: steer_angle
-      topic: /talon/current_position
-      type: Float32
-      args: {}
-
-    - name: command
-      topic: /mux/cmd
-      type: Command
-      args: {}
-
-    - name: teleop_command
-      topic: /teleop_cmd
-      type: Command
-      args: {}
-
-    - name: auto_command
-      topic: /auto_cmd
-      type: Command
-      args: {}
+  topics: !listcat
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/autonomy_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/multisense_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml
