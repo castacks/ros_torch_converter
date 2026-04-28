@@ -185,6 +185,11 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         data['random_states'] = torch.tensor(data['random_states'], dtype=torch.float32, device=device)
         data['random_controls'] = torch.tensor(data['random_controls'], dtype=torch.float32, device=device)
 
+        ## numpy list -> raw list
+        data['state_keys'] = list(data['state_keys'])
+        data['control_keys'] = list(data['control_keys'])
+        data['cost_terms'] = list(data['cost_terms'])
+
         soln = MPPISolutionTorch.from_torch(**data)
 
         soln.stamp = read_timestamp_file(base_dir, idx)
@@ -237,11 +242,11 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
         if not self.state_dim==other.state_dim:
             return False
-        if not all([k1==k2 for k1, k2 in zip(self.state_keys, other.state_keys)]):
+        if not self.state_keys==other.state_keys:
             return False
         if not self.control_dim==other.control_dim:
             return False
-        if not all([k1==k2 for k1, k2 in zip(self.control_keys, other.control_keys)]):
+        if not self.control_keys==other.control_keys:
             return False
         if not self.h==other.h:
             return False
@@ -253,7 +258,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
             return False
         if not self.solution_feasible==other.solution_feasible:
             return False
-        if not all([k1==k2 for k1, k2 in zip(self.cost_terms, other.cost_terms)]):
+        if not self.cost_terms == other.cost_terms:
             return False
         if not torch.allclose(self.solution_term_cost, other.solution_term_cost):
             return False
