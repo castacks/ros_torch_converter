@@ -5,7 +5,7 @@ import numpy as np
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
-from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from control_interfaces.msg import MPPISolution
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
@@ -104,7 +104,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         soln.solution_feasible = solution_feasible.item() if isinstance(solution_feasible, torch.Tensor) else solution_feasible
         soln.cost_terms = cost_terms
         soln.solution_term_cost = solution_term_cost.float().to(device)
-        soln.solution_term_feasible = solution_term_feasible.float().to(device)
+        soln.solution_term_feasible = solution_term_feasible.to(device)
         soln.solution_states = solution_states.float().to(device)
         soln.solution_controls = solution_controls.float().to(device)
 
@@ -145,7 +145,107 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         return soln
 
     def to_rosmsg(self):
-        return None
+        msg = MPPISolution()
+        msg.header.stamp = time_to_stamp(self.stamp)
+        msg.header.frame_id = self.frame_id
+
+        msg.state_dim = self.state_dim
+        msg.state_keys = self.state_keys
+        msg.control_dim = self.control_dim
+        msg.control_keys = self.control_keys
+        msg.h = self.h
+        msg.dt = self.dt
+
+        msg.cost_terms = self.cost_terms
+        msg.solution_term_cost = self.solution_term_cost.tolist()
+        msg.solution_term_feasible = self.solution_term_feasible.tolist()
+
+        msg.solution_states = Float32MultiArray()
+        msg.solution_states.layout.dim.append(
+            MultiArrayDimension(
+                label="row_index",
+                size=self.solution_states.shape[0],
+                stride=self.solution_states.shape[0] * self.solution_states.shape[1]
+            )
+        )
+        msg.solution_states.layout.dim.append(
+            MultiArrayDimension(
+                label="column_index",
+                size=self.solution_states.shape[1],
+                stride=self.solution_states.shape[1]
+            )
+        )
+        msg.solution_states.data = self.solution_states.flatten().cpu().numpy().tolist()
+
+        msg.solution_controls = Float32MultiArray()
+        msg.solution_controls.layout.dim.append(
+            MultiArrayDimension(
+                label="row_index",
+                size=self.solution_controls.shape[0],
+                stride=self.solution_controls.shape[0] * self.solution_controls.shape[1]
+            )
+        )
+        msg.solution_controls.layout.dim.append(
+            MultiArrayDimension(
+                label="column_index",
+                size=self.solution_controls.shape[1],
+                stride=self.solution_controls.shape[1]
+            )
+        )
+        msg.solution_controls.data = self.solution_controls.flatten().cpu().numpy().tolist()
+
+        msg.k = self.k
+
+        if self.k > 0:
+            msg.random_states = Float32MultiArray()
+            msg.random_states.layout.dim.append(
+                MultiArrayDimension(
+                    label="batch_index",
+                    size=self.random_states.shape[0],
+                    stride=self.random_states.shape[0] * self.random_states.shape[1] * self.random_states.shape[2]
+                )
+            )
+            msg.random_states.layout.dim.append(
+                MultiArrayDimension(
+                    label="row_index",
+                    size=self.random_states.shape[1],
+                    stride=self.random_states.shape[1] * self.random_states.shape[2]
+                )
+            )
+            msg.random_states.layout.dim.append(
+                MultiArrayDimension(
+                    label="column_index",
+                    size=self.random_states.shape[2],
+                    stride=self.random_states.shape[2]
+                )
+            )
+            msg.random_states.data = self.random_states.flatten().cpu().numpy().tolist()
+
+            msg.random_controls = Float32MultiArray()
+            msg.random_controls.layout.dim.append(
+                MultiArrayDimension(
+                    label="batch_index",
+                    size=self.random_controls.shape[0],
+                    stride=self.random_controls.shape[0] * self.random_controls.shape[1] * self.random_controls.shape[2]
+                )
+            )
+            msg.random_controls.layout.dim.append(
+                MultiArrayDimension(
+                    label="row_index",
+                    size=self.random_controls.shape[1],
+                    stride=self.random_controls.shape[1] * self.random_controls.shape[2]
+                )
+            )
+            msg.random_controls.layout.dim.append(
+                MultiArrayDimension(
+                    label="column_index",
+                    size=self.random_controls.shape[2],
+                    stride=self.random_controls.shape[2]
+                )
+            )
+            msg.random_controls.data = self.random_controls.flatten().cpu().numpy().tolist()  
+
+        return msg
 
     def to_kitti(self, base_dir, idx):
         update_timestamp_file(base_dir, idx, self.stamp)
@@ -286,7 +386,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
     def __repr__(self):
         return (
-            "MPPISolutionTorch with soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
-                self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
+            "MPPISolutionTorch with stamp={:.2f} frame_id={} soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
+                self.stamp, self.frame_id, self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
             )
         )

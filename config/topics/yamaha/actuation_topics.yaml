@@ -2,6 +2,7 @@
   group: controls
   topic: /talon/current_position
   type: Float32
+  max_age: 1.
   args:
     interpolation:
       type: MATCH_TOPIC #UNCHANGED/MATCH_TOPIC/MATCH_TARGET
@@ -11,31 +12,32 @@
   group: controls
   topic: /mux/cmd
   type: Command
+  max_age: 1.
   args: 
     interpolation:
       type: MATCH_TOPIC
       topic: super_odometry/odometry
 
-- name: teleop_command
-  group: controls
-  topic: /teleop_cmd
-  type: Command
-  args: 
-    interpolation:
-      type: MATCH_TOPIC
-      topic: super_odometry/odometry
+# - name: teleop_command
+#   group: controls
+#   topic: /teleop_cmd
+#   type: Command
+#   args: 
+#     interpolation:
+#       type: MATCH_TOPIC
+#       topic: super_odometry/odometry
 
-- name: auto_command
-  group: controls
-  topic: /auto_cmd
-  type: Command
-  args: 
-    interpolation:
-      type: MATCH_TOPIC
-      topic: super_odometry/odometry
+# - name: auto_command
+#   group: controls
+#   topic: /auto_cmd
+#   type: Command
+#   args: 
+#     interpolation:
+#       type: MATCH_TOPIC
+#       topic: super_odometry/odometry
 
-- name: intervention
-  group: controls
-  topic: /mux/intervention
-  type: Bool
-  args: {}
+# - name: intervention
+#   group: controls
+#   topic: /mux/intervention
+#   type: Bool
+#   args: {}
