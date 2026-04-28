@@ -8,7 +8,7 @@ from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.bool import BoolTorch
 from ros_torch_converter.datatypes.command import CommandTorch
-from ros_torch_converter.datatypes.solution import SolutionTorch
+from ros_torch_converter.datatypes.mppi_solution import MPPISolutionTorch
 from ros_torch_converter.datatypes.image import (
     ImageTorch,
     CompressedImageTorch,
@@ -42,7 +42,7 @@ str_to_cvt_class = {
     "Float32": Float32Torch,
     "Bool": BoolTorch,
     "Command": CommandTorch,
-    "Solution": SolutionTorch,
+    "MPPISolution": MPPISolutionTorch,
     "Image": ImageTorch,
     "CompressedImage": CompressedImageTorch,
     "FeatureImage": FeatureImageTorch,
