@@ -157,6 +157,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         msg.dt = self.dt
 
         msg.cost_terms = self.cost_terms
+        msg.solution_feasible = self.solution_feasible
         msg.solution_term_cost = self.solution_term_cost.tolist()
         msg.solution_term_feasible = self.solution_term_feasible.tolist()
 
