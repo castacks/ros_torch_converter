@@ -13,6 +13,7 @@ from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransfor
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 from ros_torch_converter.datatypes.people_detections import PeopleDetectionsTorch
+from ros_torch_converter.datatypes.track_path import TrackPathTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
 
@@ -31,7 +32,8 @@ str_to_cvt_class = {
     "OdomTransform": OdomTransformTorch,
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
-    "PeopleDetections": PeopleDetectionsTorch
+    "PeopleDetections": PeopleDetectionsTorch,
+    "TrackPath": TrackPathTorch,
 }
 
 class ROSTorchConverter(Node):
@@ -102,6 +104,10 @@ class ROSTorchConverter(Node):
                 continue
                 
             topic_name = topic_conf["name"]
+
+            if self.data[topic_name] is None:
+                return False
+
             data_time = self.data_times[topic_name]
             
             # Check if data is too old

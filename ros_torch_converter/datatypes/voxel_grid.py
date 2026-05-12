@@ -1,7 +1,6 @@
 import array
 import torch
 import numpy as np
-import ros2_numpy
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
@@ -10,6 +9,9 @@ from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
 from physics_atv_visual_mapping.utils import normalize_dino
 
 from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+from geometry_msgs.msg import Vector3
+from perception_interfaces.msg import FeatureVoxelGrid, VoxelGridMetadata
 
 from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
 
@@ -24,15 +26,75 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         super().__init__()
         self.voxel_grid = None
         self.device = device
+        # Indices touched by the latest lidar frame (forwarded by VoxelMapperNode
+        # for incremental normal recomputation). Empty when deserialized from
+        # FeatureVoxelGrid (over ROS we don't transmit this; recompute full).
+        self.last_touched_raster_indices = torch.zeros(0, dtype=torch.long, device=device)
 
     def from_voxel_grid(voxel_grid):
         res = VoxelGridTorch(device=voxel_grid.device)
         res.voxel_grid = voxel_grid
         return res
-    
-    def from_rosmsg(msg, feature_keys=[], device='cpu'):
-        pass
+
+    def from_rosmsg(msg, feature_keys=None, device="cpu"):
+        # ROSTorchConverter may call from_rosmsg(msg, device_str) positionally
+        if isinstance(feature_keys, str) and device == "cpu":
+            device = feature_keys
+            feature_keys = None
+        if isinstance(msg, FeatureVoxelGrid):
+            return VoxelGridTorch._from_feature_voxel_grid_msg(msg, device=device)
         return None
+
+    @staticmethod
+    def _from_feature_voxel_grid_msg(msg: FeatureVoxelGrid, device="cpu"):
+        md = LocalMapperMetadata(
+            origin=[
+                msg.metadata.origin.x,
+                msg.metadata.origin.y,
+                msg.metadata.origin.z,
+            ],
+            length=[
+                msg.metadata.length.x,
+                msg.metadata.length.y,
+                msg.metadata.length.z,
+            ],
+            resolution=[
+                msg.metadata.resolution.x,
+                msg.metadata.resolution.y,
+                msg.metadata.resolution.z,
+            ],
+            device=device,
+        )
+        n_feat = int(msg.num_features) if int(msg.num_features) > 0 else 1
+        vg = VoxelGrid(md, n_feat, device)
+        if len(msg.indices) == 0:
+            res = VoxelGridTorch(device=device)
+            res.voxel_grid = vg
+            return res
+
+        idx = torch.tensor(list(msg.indices), dtype=torch.long, device=device)
+        n = idx.shape[0]
+        flat = np.array(msg.features.data, dtype=np.float32)
+        if flat.size != n * n_feat:
+            # tolerate empty or wrong layout
+            if flat.size == 0:
+                feats = torch.zeros(n, n_feat, dtype=torch.float32, device=device)
+            else:
+                feats = torch.from_numpy(flat.reshape(-1)[: n * n_feat].reshape(n, -1)).to(device)
+                if feats.shape[1] < n_feat:
+                    pad = torch.zeros(n, n_feat - feats.shape[1], device=device, dtype=feats.dtype)
+                    feats = torch.cat([feats, pad], dim=1)
+        else:
+            feats = torch.from_numpy(flat.reshape(n, n_feat)).to(device)
+
+        vg.raster_indices = idx
+        vg.features = feats
+        vg.feature_mask = torch.ones(n, dtype=torch.bool, device=device)
+        vg.hits = torch.ones(n, dtype=torch.float32, device=device)
+        vg.misses = torch.zeros(n, dtype=torch.float32, device=device)
+        res = VoxelGridTorch(device=device)
+        res.voxel_grid = vg
+        return res
 
     def to_rosmsg(self):
         """
@@ -91,6 +153,56 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
+        return msg
+
+    def to_feature_voxel_grid_msg(self, feature_keys=None):
+        """Serialize full occupied voxel set for 3D planning (sparse indices + features)."""
+        vg = self.voxel_grid
+        msg = FeatureVoxelGrid()
+        msg.header.stamp = time_to_stamp(self.stamp)
+        msg.header.frame_id = self.frame_id
+
+        msg.metadata = VoxelGridMetadata()
+        msg.metadata.origin = Vector3(
+            x=float(vg.metadata.origin[0].item()),
+            y=float(vg.metadata.origin[1].item()),
+            z=float(vg.metadata.origin[2].item()),
+        )
+        msg.metadata.length = Vector3(
+            x=float(vg.metadata.length[0].item()),
+            y=float(vg.metadata.length[1].item()),
+            z=float(vg.metadata.length[2].item()),
+        )
+        msg.metadata.resolution = Vector3(
+            x=float(vg.metadata.resolution[0].item()),
+            y=float(vg.metadata.resolution[1].item()),
+            z=float(vg.metadata.resolution[2].item()),
+        )
+
+        ri = vg.raster_indices.detach().cpu().tolist()
+        msg.num_voxels = len(ri)
+        nf = int(vg.features.shape[1]) if vg.features.numel() > 0 else 1
+        msg.num_features = nf
+
+        if feature_keys is not None:
+            msg.feature_keys = list(feature_keys)
+        elif getattr(vg, "feature_keys", None):
+            msg.feature_keys = [str(k) for k in vg.feature_keys]
+        else:
+            msg.feature_keys = ["f{}".format(i) for i in range(nf)]
+
+        msg.indices = [int(x) for x in ri]
+
+        feat_pad = torch.zeros(vg.raster_indices.shape[0], nf, dtype=torch.float32, device=vg.device)
+        if vg.features.numel() > 0:
+            feat_pad[vg.feature_mask] = vg.features.to(dtype=torch.float32)
+        flat = feat_pad.detach().cpu().numpy().reshape(-1).astype(np.float32)
+
+        fmsg = Float32MultiArray()
+        fmsg.layout.dim.append(MultiArrayDimension(label="nvox", size=len(ri), stride=nf))
+        fmsg.layout.dim.append(MultiArrayDimension(label="nf", size=nf, stride=1))
+        fmsg.data = flat.tolist()
+        msg.features = fmsg
         return msg
 
     def to_kitti(self, base_dir, idx):
