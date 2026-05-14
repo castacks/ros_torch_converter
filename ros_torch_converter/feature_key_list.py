@@ -11,12 +11,6 @@ class FeatureKeyList:
             label=self.label + other.label,
             metainfo=self.metainfo + other.metainfo
         )
-
-    def __radd__(self, other):
-        if other == 0:
-            return self
-        return self.__add__(other)
-
     def __len__(self):
         return len(self.label)
 
@@ -102,15 +96,12 @@ class FeatureKeyList:
         idxs = [i for i,m in enumerate(self.metainfo) if m==k]
         return self[idxs]
     
+    def has_label(self, x):
+        return x in self.label
+    
     def dump(self):
         return [f"{label}, {meta}" for label, meta in zip(self.label, self.metainfo)]
     
     def load(input):
         labels, metas = zip(*[s.split(', ') for s in input])
         return FeatureKeyList(label=list(labels), metainfo=list(metas))
-
-    def from_labels(labels, meta):
-        return FeatureKeyList(
-            label=labels,
-            metainfo=[meta] * len(labels),
-        )
