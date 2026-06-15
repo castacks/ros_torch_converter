@@ -31,7 +31,7 @@ class PathTorch(TorchCoordinatorDataType):
         pat.poses = poses
         return pat
     
-    def from_rosmsg(msg, device):
+    def from_rosmsg(msg, device='cpu'):
         pat = PathTorch(device=device)
         poses = []
         for _pose in msg.poses:

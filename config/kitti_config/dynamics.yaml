@@ -16,4 +16,6 @@
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/gq7_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/racepak_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml

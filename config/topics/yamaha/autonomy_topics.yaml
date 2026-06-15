@@ -1,5 +1,27 @@
-- name: mpc_solution
-  group: controls
+- name: intervention
+  group: autonomy
+  topic: /mux/intervention
+  type: Bool
+  max_age: 1.
+  args: {}
+
+- name: mppi_solution
+  group: autonomy
   topic: /mppi/solution
-  type: Solution
+  type: MPPISolution
+  max_age: 1.
+  args: {}
+
+- name: track_path
+  group: autonomy
+  topic: /track_path
+  type: Path
+  max_age: 1.
+  args: {}
+
+- name: track_path_full
+  group: autonomy
+  topic: /track_path_full
+  type: Path
+  max_age: 1.
   args: {}

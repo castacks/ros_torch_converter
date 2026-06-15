@@ -30,7 +30,6 @@ class BoolTorch(TorchCoordinatorDataType):
 
     def from_rosmsg(msg, device='cpu'):
         res = BoolTorch(device=device)
-        print(msg.data)
         res.data = torch.tensor([msg.data], device=device)
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
@@ -59,19 +58,20 @@ class BoolTorch(TorchCoordinatorDataType):
     def save_to_file(self, base_dir, idx, file='data.txt'):
         save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
-            data = float('inf') * np.ones([idx+1])
+            data = bool('inf') * np.ones([idx+1])
         else:
             #need to reshape for 1-row data
             data = np.loadtxt(save_fp).reshape(-1)
 
         if data.shape[0] < (idx+1):
-            data_new = float('inf') * np.ones([idx+1])
+            data_new = bool('inf') * np.ones([idx+1], dtype=bool)
             data_new[:data.shape[0]] = data
             data = data_new
 
-        data[idx] = self.data.cpu().numpy()
+        # cannot populate 1D data with array. Must be scalar
+        data[idx] = self.data.cpu().numpy().item()
 
-        np.savetxt(save_fp, data)
+        np.savetxt(save_fp, data, fmt='%d')
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
