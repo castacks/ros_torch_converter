@@ -1,0 +1,602 @@
+import os
+import yaml
+import argparse
+import copy
+import time
+from datetime import timedelta
+from multiprocessing import Pool, cpu_count, Manager, set_start_method
+from threading import Thread
+import sys
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+from pathlib import Path
+from tabulate import tabulate
+
+from rosbags.highlevel import AnyReader
+from rosbags.typesys import Stores, get_typestore
+
+from tartandriver_utils.ros_utils import stamp_to_time
+from tartandriver_utils.os_utils import load_yaml
+
+from ros_torch_converter.converter import str_to_cvt_class
+from ros_torch_converter.tf_manager import TfManager
+from ros_torch_converter.datatypes.base import TimeSpec
+from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
+
+"""
+Script to create kitti-formatted datasets from ros2 bags
+General algo is something like this:
+    1. First do a pass through to figure out all the target times
+    2. Then do another pass through to actually convert messages, etc
+"""
+
+RESET = '\033[0m'
+GREEN = '\033[92m'
+GRAY = '\033[90m'
+RED = '\033[91m'
+
+def setup_queue(reader, topics, dt):
+    """
+    Initialize message queues based on config
+    """
+    start_time = reader.start_time * 1e-9
+    end_time = reader.end_time * 1e-9
+
+    target_times = np.arange(start_time, end_time, dt)
+
+    queue = {
+        'target_times': target_times,
+        'topic_times': {},
+        'topic_error': {},
+    }
+
+    for topic in topics:
+        queue['topic_times'][topic] = -np.ones(len(target_times))
+        queue['topic_error'][topic] = float('inf') * np.ones(len(target_times))
+
+    return queue
+
+def check_connections(connections, target_topics):
+    """
+    Check that all topics in target_topics in connections
+    """
+    valid = True
+    connection_topics = [x.topic for x in connections]
+    for topic in target_topics:
+        if topic not in connection_topics:
+            print('bag missing config topic {}!'.format(topic))
+            valid = False
+
+    return valid
+
+def check_missing_types(config):
+    """
+    Check all types listed in the config exist
+    """
+    missing_types = []
+    for topic_data in config["topics"]:
+        msg_type = topic_data["type"]
+        if msg_type not in str_to_cvt_class:
+            missing_types.append((topic_data["topic"], msg_type))
+
+    if missing_types:
+        print("\nERROR: Missing converters for the following message types:")
+        for topic, msg_type in missing_types:
+            print(f"  Topic: {topic}")
+            print(f"  Type: {msg_type}")
+        print("\nAvailable converters:")
+        for msg_type in sorted(str_to_cvt_class.keys()):
+            print(f"  - {msg_type}")
+        print("\nPlease add the missing types to str_to_cvt_class in converter.py")
+        exit(1)
+
+    print("All message types have converters available ✓")
+
+def display_progress_monitor(progress_queue, topic_list, bag, use_color=False):
+    """
+    Monitor and display progress in a live-updating dashboard style.
+    """
+    import sys
+
+    
+    # Initialize status for all topics
+    topic_status = {topic: {'status': 'waiting', 'progress': 0, 'total': 0, 'fps': 0.0} for topic in topic_list}
+    
+    def print_dashboard():
+        # Clear screen and move cursor to top
+        sys.stdout.write('\033[2J\033[H')
+        
+        print('4. Converting to KITTI')
+        print(f"bag: {bag}")
+        print(f"{'Topic':<50} {'Status':<15} {'Progress':<25} {'Speed':>10}")
+        print("-" * 100)
+        
+        for topic in topic_list:
+            status = topic_status[topic]
+            
+            # Format status - always use 15 character width for visible text
+            if status['status'] == 'completed':
+                if use_color:
+                    # "✓ COMPLETE" is 10 chars, need 5 more spaces, then wrap in color
+                    status_str = f"{GREEN}✓ COMPLETE     {RESET}"
+                else:
+                    status_str = f"{'✓ COMPLETE':<15}"
+                progress_str = f"{status['progress']}/{status['total']}"
+                bar = "█" * 20
+                fps_str = f"{status['fps']:>6.1f} fps"
+            elif status['status'] == 'error':
+                status_str = f"{'✗ ERROR':<15}"
+                progress_str = "0/0"
+                bar = " " * 20
+                fps_str = "  0.0 fps"
+            elif status['status'] == 'processing':
+                status_str = f"{'Processing':<15}"
+                progress_str = f"{status['progress']}/{status['total']}"
+                pct = min(status['progress'] / status['total'], 1.0) if status['total'] > 0 else 0
+                filled = int(20 * pct)
+                bar = "█" * filled + "░" * (20 - filled)
+                fps_str = f"{status['fps']:>6.1f} fps"
+            else:  # waiting/starting
+                if use_color:
+                    # "Waiting" is 7 chars, need 8 more spaces
+                    status_str = f"{GRAY}Waiting        {RESET}"
+                else:
+                    status_str = f"{'Waiting':<15}"
+                progress_str = "0/0"
+                bar = "░" * 20
+                fps_str = "  0.0 fps"
+            
+            topic_display = f"{topic:<50}"
+            print(f"{topic_display} {status_str} [{bar}] {progress_str:>10} {fps_str:>10}")
+        
+        sys.stdout.flush()
+    
+    # Print initial dashboard
+    print_dashboard()
+    
+    # Update dashboard as progress comes in
+    while True:
+        try:
+            # Non-blocking check with timeout
+            try:
+                update = progress_queue.get(timeout=0.5)
+                topic, status, progress, total, fps = update
+                topic_status[topic] = {'status': status, 'progress': progress, 'total': total, 'fps': fps}
+                print_dashboard()
+            except:
+                # Timeout - check if all completed
+                all_done = all(s['status'] in ['completed', 'error'] for s in topic_status.values())
+                if all_done:
+                    break
+        except KeyboardInterrupt:
+            break
+    
+    # Final display
+    print_dashboard()
+
+def process_cvt_entry_wrapper(args_tuple):
+    """
+    Wrapper for multiprocessing. Processes a single cvt_info entry.
+    For INTERP topics, collects all messages and calls to_interp at the end.
+    """
+    bagpath, ckey, cinfo, parsed_args, topic_times, camera_info_torch, n_frames, is_interp, progress_queue = args_tuple
+
+    topic = cinfo['topic']
+    base_dir = cinfo['dir']
+    msgtype = cinfo['msgtype']
+
+    progress_queue.put((ckey, 'starting', 0, 0, 0.0))
+
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+    checks = []
+
+    # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
+    try:
+        with AnyReader([bagpath], default_typestore=typestore) as reader:
+            matching_connections = [x for x in reader.connections if x.topic == topic]
+
+            if not matching_connections:
+                progress_queue.put((ckey, 'error', 0, 0, 0.0))
+                return ckey, checks
+
+            torch_dtype = str_to_cvt_class[msgtype]
+            start = time.time()
+            last_idx = -1
+            processed_count = 0
+            interp_buf = []
+
+            for conn, timestamp, rawdata in reader.messages(connections=matching_connections):
+                try:
+                    msg = reader.deserialize(rawdata, conn.msgtype)
+                except Exception:
+                    continue
+
+                msg_time = timestamp * 1e-9
+                if hasattr(msg, "header") and not parsed_args.use_bag_time:
+                    stamp_time = stamp_to_time(msg.header.stamp)
+                    if stamp_time != 0:
+                        msg_time = stamp_time
+
+                # Collect all messages for INTERP topics
+                if is_interp:
+                    torch_data = torch_dtype.from_rosmsg(msg)
+                    torch_data.stamp = msg_time
+                    if (len(interp_buf) == 0) or (msg_time - interp_buf[-1].stamp > 1e-16):
+                        interp_buf.append(torch_data)
+
+                # Match against target times for synced data
+                target_diffs = np.abs(topic_times - msg_time)
+                idxs = np.argwhere(target_diffs < 1e-16).flatten()
+
+                if len(idxs) > 0:
+                    last_idx = max(last_idx, idxs[0].item())
+                    processed_count += 1
+                    dur = time.time() - start
+                    rate = last_idx / dur if dur > 0 else 0
+
+                    if processed_count % 50 == 0 or processed_count == n_frames:
+                        progress_queue.put((ckey, 'processing', processed_count, n_frames, rate))
+
+                    checks.append(idxs)
+
+                    try:
+                        if camera_info_torch is not None:
+                            torch_data = torch_dtype.from_rosmsg(msg, camera_info_torch=camera_info_torch, rectify=True)
+                        else:
+                            torch_data = torch_dtype.from_rosmsg(msg)
+
+                        for idx in idxs:
+                            if parsed_args.fill_missing_stamps and torch_data.stamp == -1:
+                                torch_data.stamp = topic_times[idx]
+                            torch_data.to_kitti(base_dir, idx)
+                    except Exception:
+                        import traceback
+                        traceback.print_exc()
+                        continue
+
+        # Call to_interp after full message pass for INTERP topics
+        if is_interp:
+            torch_dtype.to_interp(base_dir, interp_buf)
+
+        dur = time.time() - start
+        rate = n_frames / dur if dur > 0 else 0
+        progress_queue.put((ckey, 'completed', n_frames, n_frames, rate))
+
+        return ckey, checks, len(interp_buf)
+
+    except Exception:
+        import traceback
+        traceback.print_exc()
+        progress_queue.put((ckey, 'error', 0, n_frames, 0.0))
+        return ckey, [], 0
+
+if __name__ == '__main__':
+    # Use 'spawn' instead of 'fork' to avoid issues with PyTorch/OpenCV in forked processes
+    try:
+        set_start_method('spawn')
+    except RuntimeError:
+        pass  # already set
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, required=True, help='path to config')
+    parser.add_argument('--calib_file', type=str, required=False, help='overwrite some tfs with calibs from this file')
+    parser.add_argument('--src_dir', type=str, required=True, help='path to input dir')
+    parser.add_argument('--dst_dir', type=str, required=True, help='path to output dir')
+    parser.add_argument('--dryrun', action='store_true', help='set this flag to check data w/o parsing it')
+    parser.add_argument('--no_plot', action='store_true', help='set this flag to not display the plot')
+    parser.add_argument('--force', action='store_true', help='dont ask to overwrite')
+    parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
+    parser.add_argument('--fill_missing_stamps', action='store_true', help='set this flag to use bag time for any data which does not have stamps')
+    parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
+    parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
+    parser.add_argument('--num_workers', type=str, default=None, help='number of parallel workers (default: min of entries and CPU cores, or "max" to use all CPU cores)')
+    parser.add_argument('--color', action='store_true', help='use colored output for different topics')
+    args = parser.parse_args()
+
+    if os.path.exists(args.dst_dir) and not args.force:
+        x = input('\n{} exists. Overwrite? [Y/n] '.format(args.dst_dir))
+        if x == 'n':
+            exit(0)
+
+    config = load_yaml(args.config)
+
+    cvt_info = {}
+    for tconf in config['topics']:
+        name = f"{tconf['group']}/{tconf['name']}"
+        assert name not in cvt_info.keys()
+
+        cvt_info[name] = {
+            'name': tconf['name'],
+            'group': tconf['group'],
+            'topic': tconf['topic'],
+            'msgtype': tconf['type'],
+            'interp': str_to_cvt_class[tconf['type']].time_spec == TimeSpec.INTERP,
+            'dir': os.path.join(args.dst_dir, tconf['group'], tconf['name'])
+        }
+
+    target_topics = set([x['topic'] for x in cvt_info.values()])
+
+    # Check for missing message type converters upfront
+    print('\n1. Check Topics in Bag:')
+    check_missing_types(config)
+
+    bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
+
+    print('processing these bags:')
+    for bfp in bag_fps:
+        print('\t' + bfp)
+
+    bagpath = Path(args.src_dir)
+
+    typestore = get_typestore(Stores.ROS2_HUMBLE)
+
+    ##print proc check table
+    tabdata = [['Name', 'Group', 'Msg Type', 'Interp', 'Topic', 'Save Path']]
+    for _ci in cvt_info.values():
+        row = [_ci[k] for k in ['name', 'group', 'msgtype', 'interp', 'topic']]
+        row.append("{dst_dir}"+_ci['dir'].split(args.dst_dir)[1])
+        tabdata.append(row)
+
+    print(f"\ndst_dir: {args.dst_dir}")
+    print(tabulate(tabdata, headers='firstrow', tablefmt='github'))
+
+    if not args.force:
+        x = input('\nDoes this look correct? [Y/n] ')
+        if x == 'n':
+            exit(0)
+        print()
+
+    frame_list = set()
+
+    full_start = time.time()
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        all_connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
+        assert check_connections(all_connections, target_topics), "missing topics"
+
+    print('\n2. Check timestamps')
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        # Do not add topics with 0 count to the queue, else sync issues
+        connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
+
+        queue = setup_queue(reader, list(target_topics), config['dt'])
+
+        for connection, timestamp, rawdata in reader.messages(connections=connections):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            topic = connection.topic
+
+            if hasattr(msg, "header") and not args.use_bag_time:
+                stamp_time = stamp_to_time(msg.header.stamp)
+                if stamp_time != 0:
+                    msg_time = stamp_time
+                frame_list.add(msg.header.frame_id)
+            else:
+                msg_time = timestamp * 1e-9
+
+            if hasattr(msg, "child_frame_id"):
+                frame_list.add(msg.child_frame_id)
+
+            tdiffs = queue['target_times'] - msg_time
+
+            better_mask = np.abs(tdiffs) < queue['topic_error'][topic]
+
+            if not config['backward_interpolation']:
+                better_mask = better_mask & (tdiffs >= 0.)
+
+            queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
+            queue['topic_times'][topic][better_mask] = msg_time
+
+    #update the tf tree
+    frame_list = list(frame_list)
+
+    # TODO FIX THIS TF HACK
+    temp_ignore = ['gq7_imu_link', 'earth', 'gps_frame', 'map', 'multisense/left_camera_optical_frame']
+    for fr in temp_ignore:
+        if fr in frame_list:
+            frame_list.remove(fr)
+
+    has_calib_file = False
+    if 'calibration' in config.keys():
+        print('applying calib file from config...')
+        calib_config = config['calibration']
+        has_calib_file = True
+
+    elif args.calib_file is not None:
+        print('applying calib file from cli...')
+        calib_config = load_yaml(args.calib_file)
+        has_calib_file = True
+
+    if not has_calib_file:
+        print('no calib file provided. Note that for Yamaha data this is probably wrong!')
+
+    if args.skip_tf:
+        print('Skipping TF processing as requested...')
+        tf_manager = None
+        tf_tmin = -np.inf
+        tf_tmax = np.inf
+    else:
+        print('\n3. Handle TF')
+        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+
+        if has_calib_file:
+            tf_manager.update_from_calib_config(calib_config)
+
+        tf_tmin, tf_tmax = tf_manager.get_valid_times_from_list(frame_list)
+
+    ##  do some proc to get consecutive segments
+    all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
+
+    for topic, err in queue['topic_error'].items():
+        all_valid_mask = all_valid_mask & (err < config['interp_tol'])
+
+    for topic, times in queue['topic_times'].items():
+        all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
+
+    assert all_valid_mask.any(), "topics not sync'ed!"
+
+    queue['target_times'] = queue['target_times'][all_valid_mask]
+
+    for topic in queue['topic_times'].keys():
+        queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
+        queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
+
+    n_frames = int(all_valid_mask.sum())
+    print('keeping {}/{} potential frames.'.format(n_frames, all_valid_mask.shape[0]))
+
+    os.makedirs(args.dst_dir, exist_ok=True)
+    np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
+
+    ## setup folder structure/populate timestamps
+    for cvt_config in cvt_info.values():
+        topic = cvt_config['topic']
+        topic_dir = cvt_config['dir']
+        os.makedirs(topic_dir, exist_ok=True)
+
+        np.savetxt(os.path.join(topic_dir, 'timestamps.txt'), queue['topic_times'][topic])
+        np.savetxt(os.path.join(topic_dir, 'errors.txt'), queue['topic_error'][topic])
+
+    checks = {k:[] for k in target_topics}
+
+    if tf_manager is not None:
+        tf_manager.to_kitti(args.dst_dir)
+
+        print('TF TREE:\n')
+        print(tf_manager.tf_tree)
+
+    plt.plot(queue['target_times'], marker='.', label='target_times')
+
+    x = np.arange(len(queue['target_times']))
+
+    if tf_manager is not None:
+        if tf_tmin > 0.:
+            idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
+            plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
+
+        if tf_tmax < 1e16:
+            idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
+            plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
+
+    for topic in target_topics:
+        times = queue['topic_times'][topic]
+        error = queue['topic_error'][topic]
+        mask = error < config['interp_tol']
+        plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
+
+    plt.title('time sync graph')
+    plt.legend()
+
+    plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
+
+    #save tf
+    if tf_manager is not None:
+        tf_manager.to_kitti(args.dst_dir)
+
+    if args.dryrun:
+        if not args.no_plot:
+            plt.show()
+        exit(0)
+
+    # Cache camera_info messages if rectification is requested
+    camera_info_cache = {}
+    if args.rectify:
+        with AnyReader([bagpath], default_typestore=typestore) as reader:
+            camera_info_topics = [topic for topic in target_topics if 'camera_info' in topic]
+            if camera_info_topics:
+                print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
+                camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
+                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
+                    msg = reader.deserialize(rawdata, connection.msgtype)
+                    camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
+                    camera_info_cache[connection.topic] = camera_info_torch
+                print(f"Cached {len(camera_info_cache)} camera_info messages")
+            else:
+                print("WARNING: --rectify flag set but no camera_info topics found in bag!")
+
+    # Process cvt_info entries in parallel using multiprocessing
+    progress_queue = Manager().Queue()
+
+    process_args = []
+    for idx, (ckey, cinfo) in enumerate(cvt_info.items()):
+        topic = cinfo['topic']
+        topic_times = queue['topic_times'][topic]
+        is_interp = cinfo['interp'] # topic in topics_to_interp
+
+        camera_info_torch = None
+        if args.rectify and cinfo['msgtype'] == 'CompressedImage':
+            base_topic = topic.replace('/image_raw/compressed', '').replace('/image/compressed', '').replace('/compressed', '')
+            camera_info_topic = base_topic + '/camera_info'
+            camera_info_torch = camera_info_cache.get(camera_info_topic, None)
+            if camera_info_torch is None:
+                print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
+
+        process_args.append((bagpath, ckey, cinfo, args, topic_times, camera_info_torch, n_frames, is_interp, progress_queue))
+
+    if args.num_workers is None:
+        num_workers = min(len(cvt_info), cpu_count())
+    elif args.num_workers == "max":
+        num_workers = cpu_count()
+    else:
+        num_workers = min(cpu_count(), int(args.num_workers))
+
+    tokitti_start = time.time()
+    print('\n4. Converting to KITTI')
+    print(f"\nProcessing {len(cvt_info)} entries in parallel using {num_workers} workers...\n")
+
+    monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, list(cvt_info.keys()), args.src_dir, args.color))
+    monitor_thread.daemon = True
+    monitor_thread.start()
+
+    with Pool(processes=num_workers) as pool:
+        try:
+            async_result = pool.map_async(process_cvt_entry_wrapper, process_args)
+            results = async_result.get(timeout=7200)  # 2 hour timeout
+        except TimeoutError:
+            print("\nERROR: Processing timed out after 2 hours")
+            pool.terminate()
+            pool.join()
+            raise
+
+    monitor_thread.join(timeout=2)
+
+    # Collect results, merging checks by topic
+    checks = {}
+    interp_counts = {}
+    for ckey, topic_checks, interp_count in results:
+        topic = cvt_info[ckey]['topic']
+        if topic not in checks:
+            checks[topic] = []
+        checks[topic].extend(topic_checks)
+        if interp_count > 0:
+            interp_counts[topic] = interp_count
+
+    full_dur = time.time() - full_start
+    tokitti_dur = time.time() - tokitti_start
+    rate = n_frames / tokitti_dur if tokitti_dur > 0 else 0
+    print('\n5. Verification:')
+    print(f"All {len(cvt_info)} entries completed successfully!")
+    print(f'Total processing time: {timedelta(seconds=int(full_dur))}')
+    print(f'to_kitti time: {timedelta(seconds=int(tokitti_dur))}')
+    print(f'to_kitti rate: {rate:.1f} frames/sec')
+
+    ## check that all idxs got filled
+    checks = {k: np.sort(np.concatenate(v)) if len(v) > 0 else np.array([]) for k, v in checks.items()}
+
+    print("{}/{} valid frames for dataset".format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+    verif_rows = []
+    for topic, idxs in checks.items():
+        if len(idxs) > 0:
+            valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+            if args.color:
+                status = f"{GREEN}✓{RESET}" if valid else f"{RED}✗{RESET}"
+            else:
+                status = "✓" if valid else "✗"
+            frames_str = f'{len(np.unique(idxs))}/{all_valid_mask.sum()}'
+        else:
+            status = f"{RED}✗{RESET}" if args.color else "✗"
+            frames_str = f'0/{all_valid_mask.sum()} (NO DATA)'
+        interp_str = str(interp_counts[topic]) if topic in interp_counts else '-'
+        verif_rows.append([status, topic, frames_str, interp_str])
+    print(tabulate(verif_rows, headers=['', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
+
+    print(f'\nDone processing {queue["target_times"].shape[0]} frames.')
