@@ -32,6 +32,7 @@
   group: controls
   topic: /teleop_cmd
   type: Command
+  optional: true
   args: 
     interpolation:
       type: MATCH_TOPIC
@@ -41,6 +42,7 @@
   group: controls
   topic: /auto_cmd
   type: Command
+  optional: true
   args: 
     interpolation:
       type: MATCH_TOPIC

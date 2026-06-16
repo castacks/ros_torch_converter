@@ -3,6 +3,7 @@
   topic: /racepak/pedal_pos
   type: PedalPos
   max_age: 1.
+  optional: true
   args:
     interpolation:
       type: MATCH_TOPIC
@@ -13,6 +14,7 @@
   topic: /racepak/shock_pos
   type: ShockPos
   max_age: 1.
+  optional: true
   args:
     interpolation:
       type: MATCH_TOPIC
@@ -23,6 +25,7 @@
   topic: /racepak/wheel_rpm
   type: WheelRPM
   max_age: 1.
+  optional: true
   args:
     interpolation:
       type: MATCH_TOPIC

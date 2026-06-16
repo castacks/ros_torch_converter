@@ -27,15 +27,31 @@ from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
 
 """
 Script to create kitti-formatted datasets from ros2 bags
-General algo is something like this:
-    1. First do a pass through to figure out all the target times
-    2. Then do another pass through to actually convert messages, etc
+General algo:
+    1. Identify missing topics
+    2. Do a pass through to figure out all the target times
+    3. Set up TFs
+    4. Convert messages to KITTI format & interpolate interpolable types
+    5. Verify
 """
 
 RESET = '\033[0m'
 GREEN = '\033[92m'
 GRAY = '\033[90m'
 RED = '\033[91m'
+
+GROUP_COLORS = {
+    'autonomy':       '\033[93m',  # Bright yellow
+    'controls':       '\033[96m',  # Bright cyan
+    'sensors':        '\033[94m',  # Bright blue
+    'super_odometry': '\033[95m',  # Bright magenta
+}
+
+def group_color(group):
+    return GROUP_COLORS.get(group, GRAY)
+
+def apply_color(color, text):
+    return f"{color}{text}{RESET}" if color else text
 
 def setup_queue(reader, topics, dt):
     """
@@ -58,18 +74,33 @@ def setup_queue(reader, topics, dt):
 
     return queue
 
-def check_connections(connections, target_topics):
+def get_filtered_config(connections, cvt_info):
     """
-    Check that all topics in target_topics in connections
+    Check all required topics in the config are present in connections.
+    
+    Returns:
+        filtered_config: in format {'topic': {kwargs}, ...}.
     """
-    valid = True
     connection_topics = [x.topic for x in connections]
-    for topic in target_topics:
+    missing_topics = []
+    missing_optional_topics = []
+    filt_cvt_info = {} # cvt_info with only topics present in bag
+    for k, ci in cvt_info.items():
+        topic = ci['topic']
         if topic not in connection_topics:
-            print('bag missing config topic {}!'.format(topic))
-            valid = False
+            if not ci['optional']:
+                missing_topics.append(topic)
+            else:
+                missing_optional_topics.append(topic)
+        else:
+            filt_cvt_info[k] = copy.deepcopy(ci)
 
-    return valid
+    assert not missing_topics, "Bag missing config required topics:{}".format("\n\t".join(missing_topics))
+
+    missing_optional = '\n'.join(missing_optional_topics)
+    print(f"\nMissing optional topics:\n{missing_optional}")
+
+    return filt_cvt_info
 
 def check_missing_types(config):
     """
@@ -148,7 +179,11 @@ def display_progress_monitor(progress_queue, topic_list, bag, use_color=False):
                 bar = "░" * 20
                 fps_str = "  0.0 fps"
             
-            topic_display = f"{topic:<50}"
+            if use_color:
+                color = group_color(topic.split('/')[0])
+                topic_display = f"{color}{topic:<50}{RESET}"
+            else:
+                topic_display = f"{topic:<50}"
             print(f"{topic_display} {status_str} [{bar}] {progress_str:>10} {fps_str:>10}")
         
         sys.stdout.flush()
@@ -313,10 +348,11 @@ if __name__ == '__main__':
             'topic': tconf['topic'],
             'msgtype': tconf['type'],
             'interp': str_to_cvt_class[tconf['type']].time_spec == TimeSpec.INTERP,
+            'optional': tconf.get('optional', False),
             'dir': os.path.join(args.dst_dir, tconf['group'], tconf['name'])
         }
 
-    target_topics = set([x['topic'] for x in cvt_info.values()])
+    all_topics = set([x['topic'] for x in cvt_info.values()])
 
     # Check for missing message type converters upfront
     print('\n1. Check Topics in Bag:')
@@ -333,14 +369,23 @@ if __name__ == '__main__':
     typestore = get_typestore(Stores.ROS2_HUMBLE)
 
     ##print proc check table
-    tabdata = [['Name', 'Group', 'Msg Type', 'Interp', 'Topic', 'Save Path']]
-    for _ci in cvt_info.values():
-        row = [_ci[k] for k in ['name', 'group', 'msgtype', 'interp', 'topic']]
-        row.append("{dst_dir}"+_ci['dir'].split(args.dst_dir)[1])
+    tabdata = [['Name', 'Group', 'Msg Type', 'Interp', 'Optional', 'Topic', 'Save Path']]
+    for _, _ci in sorted(cvt_info.items()):
+        row = [_ci[k] for k in ['name', 'group', 'msgtype', 'interp', 'optional', 'topic']]
+        row.append("{dst_dir}/"+_ci['dir'].split(args.dst_dir)[1])
+        if args.color:
+            color = group_color(_ci['group'])
+            row = [f"{color}{cell}{RESET}" for cell in row]
         tabdata.append(row)
 
     print(f"\ndst_dir: {args.dst_dir}")
     print(tabulate(tabdata, headers='firstrow', tablefmt='github'))
+
+    frame_list = set()
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        all_connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in all_topics]
+        filt_cvt_info = get_filtered_config(all_connections, cvt_info)
+        target_topics = set([x['topic'] for x in filt_cvt_info.values()])
 
     if not args.force:
         x = input('\nDoes this look correct? [Y/n] ')
@@ -348,13 +393,7 @@ if __name__ == '__main__':
             exit(0)
         print()
 
-    frame_list = set()
-
     full_start = time.time()
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
-        all_connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
-        assert check_connections(all_connections, target_topics), "missing topics"
-
     print('\n2. Check timestamps')
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         # Do not add topics with 0 count to the queue, else sync issues
@@ -448,15 +487,13 @@ if __name__ == '__main__':
     np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
-    for cvt_config in cvt_info.values():
+    for cvt_config in filt_cvt_info.values():
         topic = cvt_config['topic']
         topic_dir = cvt_config['dir']
         os.makedirs(topic_dir, exist_ok=True)
 
         np.savetxt(os.path.join(topic_dir, 'timestamps.txt'), queue['topic_times'][topic])
         np.savetxt(os.path.join(topic_dir, 'errors.txt'), queue['topic_error'][topic])
-
-    checks = {k:[] for k in target_topics}
 
     if tf_manager is not None:
         tf_manager.to_kitti(args.dst_dir)
@@ -517,7 +554,7 @@ if __name__ == '__main__':
     progress_queue = Manager().Queue()
 
     process_args = []
-    for idx, (ckey, cinfo) in enumerate(cvt_info.items()):
+    for idx, (ckey, cinfo) in enumerate(sorted(filt_cvt_info.items())):
         topic = cinfo['topic']
         topic_times = queue['topic_times'][topic]
         is_interp = cinfo['interp'] # topic in topics_to_interp
@@ -533,7 +570,7 @@ if __name__ == '__main__':
         process_args.append((bagpath, ckey, cinfo, args, topic_times, camera_info_torch, n_frames, is_interp, progress_queue))
 
     if args.num_workers is None:
-        num_workers = min(len(cvt_info), cpu_count())
+        num_workers = min(len(filt_cvt_info), cpu_count())
     elif args.num_workers == "max":
         num_workers = cpu_count()
     else:
@@ -541,9 +578,9 @@ if __name__ == '__main__':
 
     tokitti_start = time.time()
     print('\n4. Converting to KITTI')
-    print(f"\nProcessing {len(cvt_info)} entries in parallel using {num_workers} workers...\n")
+    print(f"\nProcessing {len(filt_cvt_info)} entries in parallel using {num_workers} workers...\n")
 
-    monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, list(cvt_info.keys()), args.src_dir, args.color))
+    monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, sorted(filt_cvt_info.keys()), args.src_dir, args.color))
     monitor_thread.daemon = True
     monitor_thread.start()
 
@@ -563,7 +600,7 @@ if __name__ == '__main__':
     checks = {}
     interp_counts = {}
     for ckey, topic_checks, interp_count in results:
-        topic = cvt_info[ckey]['topic']
+        topic = filt_cvt_info[ckey]['topic']
         if topic not in checks:
             checks[topic] = []
         checks[topic].extend(topic_checks)
@@ -574,7 +611,8 @@ if __name__ == '__main__':
     tokitti_dur = time.time() - tokitti_start
     rate = n_frames / tokitti_dur if tokitti_dur > 0 else 0
     print('\n5. Verification:')
-    print(f"All {len(cvt_info)} entries completed successfully!")
+    print(f"{len(filt_cvt_info)}/{len(cvt_info)} present entries")
+    print(f"All present entries completed successfully")
     print(f'Total processing time: {timedelta(seconds=int(full_dur))}')
     print(f'to_kitti time: {timedelta(seconds=int(tokitti_dur))}')
     print(f'to_kitti rate: {rate:.1f} frames/sec')
@@ -583,20 +621,44 @@ if __name__ == '__main__':
     checks = {k: np.sort(np.concatenate(v)) if len(v) > 0 else np.array([]) for k, v in checks.items()}
 
     print("{}/{} valid frames for dataset".format(all_valid_mask.sum(), all_valid_mask.shape[0]))
-    verif_rows = []
-    for topic, idxs in checks.items():
+    rows = []
+    good_str = "SUCCESS ✓"
+    bad_str = "FAIL ✗"
+    skip_str = "SKIPPED -"
+    good_clr = GREEN if args.color else ''
+    bad_clr = RED if args.color else ''
+    skip_clr = GRAY if args.color else ''
+
+    for ckey in sorted(cvt_info.keys()):
+        cinfo = cvt_info[ckey]
+        topic = cinfo['topic']
+        grp_clr = group_color(cinfo['group']) if args.color else ''
+
+        if ckey not in filt_cvt_info:
+            rows.append([
+                apply_color(skip_clr, skip_str),
+                apply_color(grp_clr, topic),
+                apply_color(grp_clr, '- (optional)'),
+                apply_color(grp_clr, '-'),
+            ])
+            continue
+
+        idxs = checks.get(topic, np.array([]))
         if len(idxs) > 0:
             valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
-            if args.color:
-                status = f"{GREEN}✓{RESET}" if valid else f"{RED}✗{RESET}"
-            else:
-                status = "✓" if valid else "✗"
+            status = apply_color(good_clr if valid else bad_clr, good_str if valid else bad_str)
             frames_str = f'{len(np.unique(idxs))}/{all_valid_mask.sum()}'
         else:
-            status = f"{RED}✗{RESET}" if args.color else "✗"
+            status = apply_color(bad_clr, bad_str)
             frames_str = f'0/{all_valid_mask.sum()} (NO DATA)'
+
         interp_str = str(interp_counts[topic]) if topic in interp_counts else '-'
-        verif_rows.append([status, topic, frames_str, interp_str])
-    print(tabulate(verif_rows, headers=['', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
+        rows.append([
+            status,
+            apply_color(grp_clr, topic),
+            apply_color(grp_clr, frames_str),
+            apply_color(grp_clr, interp_str)
+        ])
+    print(tabulate(rows, headers=['Status', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
 
     print(f'\nDone processing {queue["target_times"].shape[0]} frames.')
