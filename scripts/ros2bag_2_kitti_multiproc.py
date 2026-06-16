@@ -125,104 +125,106 @@ def check_missing_types(config):
 
     print("All message types have converters available ✓")
 
-def display_progress_monitor(progress_queue, topic_list, bag, use_color=False):
+def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_color=False):
     """
     Monitor and display progress in a live-updating dashboard style.
+    Supports sharded topics: multiple workers reporting to the same ckey are aggregated.
     """
-    import sys
+    # shards[ckey][shard_id] = {status, progress, total, fps}
+    shards = {
+        ckey: {i: {'status': 'waiting', 'progress': 0, 'total': 0, 'fps': 0.0}
+               for i in range(shard_counts[ckey])}
+        for ckey in topic_list
+    }
 
-    
-    # Initialize status for all topics
-    topic_status = {topic: {'status': 'waiting', 'progress': 0, 'total': 0, 'fps': 0.0} for topic in topic_list}
-    
+    def agg(ckey):
+        """Aggregate shard statuses into a single display status for a ckey."""
+        shard_list = list(shards[ckey].values())
+        statuses = [s['status'] for s in shard_list]
+        progress = sum(s['progress'] for s in shard_list)
+        total    = sum(s['total']    for s in shard_list)
+        fps      = sum(s['fps']      for s in shard_list)
+        if all(s == 'completed' for s in statuses):
+            status = 'completed'
+        elif any(s == 'error' for s in statuses):
+            status = 'error'
+        elif any(s in ('processing', 'completed') for s in statuses):
+            status = 'processing'
+        else:
+            status = 'waiting'
+        return status, progress, total, fps
+
     def print_dashboard():
-        # Clear screen and move cursor to top
         sys.stdout.write('\033[2J\033[H')
-        
+
         print('4. Converting to KITTI')
         print(f"bag: {bag}")
         print(f"{'Topic':<50} {'Status':<15} {'Progress':<25} {'Speed':>10}")
         print("-" * 100)
-        
-        for topic in topic_list:
-            status = topic_status[topic]
-            
-            # Format status - always use 15 character width for visible text
-            if status['status'] == 'completed':
-                if use_color:
-                    # "✓ COMPLETE" is 10 chars, need 5 more spaces, then wrap in color
-                    status_str = f"{GREEN}✓ COMPLETE     {RESET}"
-                else:
-                    status_str = f"{'✓ COMPLETE':<15}"
-                progress_str = f"{status['progress']}/{status['total']}"
+
+        for ckey in topic_list:
+            agg_status, progress, total, fps = agg(ckey)
+
+            if agg_status == 'completed':
+                status_str = f"{GREEN}✓ COMPLETE     {RESET}" if use_color else f"{'✓ COMPLETE':<15}"
                 bar = "█" * 20
-                fps_str = f"{status['fps']:>6.1f} fps"
-            elif status['status'] == 'error':
+            elif agg_status == 'error':
                 status_str = f"{'✗ ERROR':<15}"
-                progress_str = "0/0"
                 bar = " " * 20
-                fps_str = "  0.0 fps"
-            elif status['status'] == 'processing':
+            elif agg_status == 'processing':
                 status_str = f"{'Processing':<15}"
-                progress_str = f"{status['progress']}/{status['total']}"
-                pct = min(status['progress'] / status['total'], 1.0) if status['total'] > 0 else 0
+                pct = min(progress / total, 1.0) if total > 0 else 0
                 filled = int(20 * pct)
                 bar = "█" * filled + "░" * (20 - filled)
-                fps_str = f"{status['fps']:>6.1f} fps"
-            else:  # waiting/starting
-                if use_color:
-                    # "Waiting" is 7 chars, need 8 more spaces
-                    status_str = f"{GRAY}Waiting        {RESET}"
-                else:
-                    status_str = f"{'Waiting':<15}"
-                progress_str = "0/0"
-                bar = "░" * 20
-                fps_str = "  0.0 fps"
-            
-            if use_color:
-                color = group_color(topic.split('/')[0])
-                topic_display = f"{color}{topic:<50}{RESET}"
             else:
-                topic_display = f"{topic:<50}"
+                status_str = f"{GRAY}Waiting        {RESET}" if use_color else f"{'Waiting':<15}"
+                bar = "░" * 20
+
+            n = shard_counts[ckey]
+            shard_tag = f" [{n}x]" if n > 1 else ""
+            progress_str = f"{progress}/{total}"
+            fps_str = f"{fps:>6.1f} fps"
+
+            if use_color:
+                color = group_color(ckey.split('/')[0])
+                topic_display = f"{color}{ckey + shard_tag:<50}{RESET}"
+            else:
+                topic_display = f"{ckey + shard_tag:<50}"
             print(f"{topic_display} {status_str} [{bar}] {progress_str:>10} {fps_str:>10}")
-        
+
         sys.stdout.flush()
-    
-    # Print initial dashboard
+
     print_dashboard()
-    
-    # Update dashboard as progress comes in
+
     while True:
         try:
-            # Non-blocking check with timeout
             try:
-                update = progress_queue.get(timeout=0.5)
-                topic, status, progress, total, fps = update
-                topic_status[topic] = {'status': status, 'progress': progress, 'total': total, 'fps': fps}
+                ckey, shard_id, status, progress, total, fps = progress_queue.get(timeout=0.5)
+                shards[ckey][shard_id] = {'status': status, 'progress': progress, 'total': total, 'fps': fps}
                 print_dashboard()
             except:
-                # Timeout - check if all completed
-                all_done = all(s['status'] in ['completed', 'error'] for s in topic_status.values())
+                all_done = all(agg(ckey)[0] in ('completed', 'error') for ckey in topic_list)
                 if all_done:
                     break
         except KeyboardInterrupt:
             break
-    
-    # Final display
+
     print_dashboard()
 
 def process_cvt_entry_wrapper(args_tuple):
     """
     Wrapper for multiprocessing. Processes a single cvt_info entry.
     For INTERP topics, collects all messages and calls to_interp at the end.
+    shard_id/frame_offset support splitting a topic across multiple workers by frame range:
+      topic_times is the shard's slice; frame_offset shifts local indices to global ones.
     """
-    bagpath, ckey, cinfo, parsed_args, topic_times, camera_info_torch, n_frames, is_interp, progress_queue = args_tuple
+    bagpath, ckey, cinfo, parsed_args, topic_times, camera_info_torch, n_frames, is_interp, shard_id, frame_offset, progress_queue = args_tuple
 
     topic = cinfo['topic']
     base_dir = cinfo['dir']
     msgtype = cinfo['msgtype']
 
-    progress_queue.put((ckey, 'starting', 0, 0, 0.0))
+    progress_queue.put((ckey, shard_id, 'starting', 0, 0, 0.0))
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     checks = []
@@ -233,8 +235,8 @@ def process_cvt_entry_wrapper(args_tuple):
             matching_connections = [x for x in reader.connections if x.topic == topic]
 
             if not matching_connections:
-                progress_queue.put((ckey, 'error', 0, 0, 0.0))
-                return ckey, checks
+                progress_queue.put((ckey, shard_id, 'error', 0, 0, 0.0))
+                return ckey, shard_id, checks, 0
 
             torch_dtype = str_to_cvt_class[msgtype]
             start = time.time()
@@ -261,20 +263,22 @@ def process_cvt_entry_wrapper(args_tuple):
                     if (len(interp_buf) == 0) or (msg_time - interp_buf[-1].stamp > 1e-16):
                         interp_buf.append(torch_data)
 
-                # Match against target times for synced data
+                # Match against this shard's slice of target times
                 target_diffs = np.abs(topic_times - msg_time)
-                idxs = np.argwhere(target_diffs < 1e-16).flatten()
+                local_idxs = np.argwhere(target_diffs < 1e-16).flatten()
 
-                if len(idxs) > 0:
-                    last_idx = max(last_idx, idxs[0].item())
+                if len(local_idxs) > 0:
+                    last_idx = max(last_idx, local_idxs[0].item())
                     processed_count += 1
                     dur = time.time() - start
                     rate = last_idx / dur if dur > 0 else 0
 
                     if processed_count % 50 == 0 or processed_count == n_frames:
-                        progress_queue.put((ckey, 'processing', processed_count, n_frames, rate))
+                        progress_queue.put((ckey, shard_id, 'processing', processed_count, n_frames, rate))
 
-                    checks.append(idxs)
+                    # Track global indices for verification
+                    global_idxs = local_idxs + frame_offset
+                    checks.append(global_idxs)
 
                     try:
                         if camera_info_torch is not None:
@@ -282,10 +286,10 @@ def process_cvt_entry_wrapper(args_tuple):
                         else:
                             torch_data = torch_dtype.from_rosmsg(msg)
 
-                        for idx in idxs:
+                        for local_idx, global_idx in zip(local_idxs, global_idxs):
                             if parsed_args.fill_missing_stamps and torch_data.stamp == -1:
-                                torch_data.stamp = topic_times[idx]
-                            torch_data.to_kitti(base_dir, idx)
+                                torch_data.stamp = topic_times[local_idx]
+                            torch_data.to_kitti(base_dir, global_idx)
                     except Exception:
                         import traceback
                         traceback.print_exc()
@@ -297,15 +301,15 @@ def process_cvt_entry_wrapper(args_tuple):
 
         dur = time.time() - start
         rate = n_frames / dur if dur > 0 else 0
-        progress_queue.put((ckey, 'completed', n_frames, n_frames, rate))
+        progress_queue.put((ckey, shard_id, 'completed', n_frames, n_frames, rate))
 
-        return ckey, checks, len(interp_buf)
+        return ckey, shard_id, checks, len(interp_buf)
 
     except Exception:
         import traceback
         traceback.print_exc()
-        progress_queue.put((ckey, 'error', 0, n_frames, 0.0))
-        return ckey, [], 0
+        progress_queue.put((ckey, shard_id, 'error', 0, n_frames, 0.0))
+        return ckey, shard_id, [], 0
 
 if __name__ == '__main__':
     # Use 'spawn' instead of 'fork' to avoid issues with PyTorch/OpenCV in forked processes
@@ -342,13 +346,18 @@ if __name__ == '__main__':
         name = f"{tconf['group']}/{tconf['name']}"
         assert name not in cvt_info.keys()
 
+        is_interp = str_to_cvt_class[tconf['type']].time_spec == TimeSpec.INTERP
+        n_parallel = tconf.get('parallel_workers', 1)
+        assert not (is_interp and n_parallel > 1), \
+            f"Topic {tconf['topic']} is INTERP and cannot use parallel_workers > 1 (For now)" # TODO (low priority) move interp to separate job after main to_kitti is done
         cvt_info[name] = {
             'name': tconf['name'],
             'group': tconf['group'],
             'topic': tconf['topic'],
             'msgtype': tconf['type'],
-            'interp': str_to_cvt_class[tconf['type']].time_spec == TimeSpec.INTERP,
+            'interp': is_interp,
             'optional': tconf.get('optional', False),
+            'parallel_workers': n_parallel,
             'dir': os.path.join(args.dst_dir, tconf['group'], tconf['name'])
         }
 
@@ -372,7 +381,7 @@ if __name__ == '__main__':
     tabdata = [['Name', 'Group', 'Msg Type', 'Interp', 'Optional', 'Topic', 'Save Path']]
     for _, _ci in sorted(cvt_info.items()):
         row = [_ci[k] for k in ['name', 'group', 'msgtype', 'interp', 'optional', 'topic']]
-        row.append("{dst_dir}/"+_ci['dir'].split(args.dst_dir)[1])
+        row.append("{dst_dir}"+_ci['dir'].split(args.dst_dir)[1])
         if args.color:
             color = group_color(_ci['group'])
             row = [f"{color}{cell}{RESET}" for cell in row]
@@ -554,10 +563,12 @@ if __name__ == '__main__':
     progress_queue = Manager().Queue()
 
     process_args = []
-    for idx, (ckey, cinfo) in enumerate(sorted(filt_cvt_info.items())):
+    shard_counts = {}
+    for ckey, cinfo in sorted(filt_cvt_info.items()):
         topic = cinfo['topic']
-        topic_times = queue['topic_times'][topic]
-        is_interp = cinfo['interp'] # topic in topics_to_interp
+        topic_times_full = queue['topic_times'][topic]
+        is_interp = cinfo['interp']
+        n_parallel = cinfo['parallel_workers']
 
         camera_info_torch = None
         if args.rectify and cinfo['msgtype'] == 'CompressedImage':
@@ -567,10 +578,19 @@ if __name__ == '__main__':
             if camera_info_torch is None:
                 print(f"\nWARNING: No camera_info found for {topic}, skipping rectification")
 
-        process_args.append((bagpath, ckey, cinfo, args, topic_times, camera_info_torch, n_frames, is_interp, progress_queue))
+        shard_counts[ckey] = n_parallel
+        if n_parallel > 1:
+            chunks = np.array_split(topic_times_full, n_parallel)
+            frame_offset = 0
+            for shard_id, chunk in enumerate(chunks):
+                process_args.append((bagpath, ckey, cinfo, args, chunk, camera_info_torch, len(chunk), is_interp, shard_id, frame_offset, progress_queue))
+                frame_offset += len(chunk)
+        else:
+            process_args.append((bagpath, ckey, cinfo, args, topic_times_full, camera_info_torch, n_frames, is_interp, 0, 0, progress_queue))
 
+    total_workers_needed = sum(shard_counts.values())
     if args.num_workers is None:
-        num_workers = min(len(filt_cvt_info), cpu_count())
+        num_workers = min(total_workers_needed, cpu_count())
     elif args.num_workers == "max":
         num_workers = cpu_count()
     else:
@@ -578,9 +598,9 @@ if __name__ == '__main__':
 
     tokitti_start = time.time()
     print('\n4. Converting to KITTI')
-    print(f"\nProcessing {len(filt_cvt_info)} entries in parallel using {num_workers} workers...\n")
+    print(f"\nProcessing {total_workers_needed} workers ({len(filt_cvt_info)} topics) in parallel using {num_workers} pool workers...\n")
 
-    monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, sorted(filt_cvt_info.keys()), args.src_dir, args.color))
+    monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, sorted(filt_cvt_info.keys()), shard_counts, args.src_dir, args.color))
     monitor_thread.daemon = True
     monitor_thread.start()
 
@@ -596,10 +616,10 @@ if __name__ == '__main__':
 
     monitor_thread.join(timeout=2)
 
-    # Collect results, merging checks by topic
+    # Collect results, merging checks by topic across shards
     checks = {}
     interp_counts = {}
-    for ckey, topic_checks, interp_count in results:
+    for ckey, shard_id, topic_checks, interp_count in results:
         topic = filt_cvt_info[ckey]['topic']
         if topic not in checks:
             checks[topic] = []

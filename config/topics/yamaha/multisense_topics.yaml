@@ -10,6 +10,7 @@
   topic: /multisense/left/image_rect_color
   type: Image
   max_age: 1.
+  parallel_workers: 4
   args: {}
 
 - name: multisense_left_camera_info
