@@ -16,6 +16,7 @@ from tartandriver_utils.os_utils import load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
+from ros_torch_converter.utils import select_ros1_bags
 from ros_torch_converter.datatypes.base import TimeSpec
 from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
 
@@ -130,19 +131,17 @@ if __name__ == '__main__':
             ros1 = True
             print('autodetected ROS1 .bag files in src_dir')
 
-    ext = '.bag' if ros1 else '.mcap'
-    bag_fps = sorted([x for x in os.listdir(args.src_dir) if x.endswith(ext)] if ros1
-                     else [x for x in os.listdir(args.src_dir) if '.mcap' in x])
-
-    print('processing these bags:')
-    for bfp in bag_fps:
-        print('\t' + bfp)
-
-    # ROS1: pass the list of .bag files (AnyReader merges them); ROS2: pass the dir.
+    # ROS1: --src_dir may point at a whole bag folder. Pre-filter with a cheap topic peek so we
+    # only open/index the bags that actually carry a configured topic (select_ros1_bags reads
+    # just each bag's connection records, not its message index). ROS2: pass the rosbag2 dir.
     if ros1:
-        bag_paths = [Path(args.src_dir) / x for x in bag_fps]
+        bag_paths = select_ros1_bags(args.src_dir, target_topics)
     else:
         bag_paths = [Path(args.src_dir)]
+
+    print('processing these bags:')
+    for bp in bag_paths:
+        print('\t' + bp.name)
 
     typestore = get_typestore(Stores.ROS1_NOETIC if ros1 else Stores.ROS2_HUMBLE)
 

@@ -307,14 +307,14 @@ class TfManager:
 
         # ROS1 bags are individual files (the per-sensor bags must be merged into one
         # AnyReader); ROS2 bags are directories. Pick the matching extension + typestore.
-        ext = '.bag' if ros1 else '.mcap'
-        bag_fps = sorted([x for x in os.listdir(rosbag_fp) if x.endswith(ext)])
-
+        # ROS1: rosbag_fp may be a whole bag folder, so pre-filter with a cheap topic peek to
+        # only open/index bags that actually carry /tf or /tf_static (not every sensor bag).
         #have every frame keep track of tf to its parent
         frames = {}
 
         if ros1:
-            bag_paths = [Path(rosbag_fp) / x for x in bag_fps]
+            from ros_torch_converter.utils import select_ros1_bags
+            bag_paths = select_ros1_bags(rosbag_fp, ['/tf', '/tf_static'])
         else:
             bag_paths = [Path(rosbag_fp)]
 
