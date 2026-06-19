@@ -512,7 +512,34 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
     def __repr__(self):
         return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
      
-class FeatureImageTorch(TorchCoordinatorDataType): 
+class CompressedThermal16bitImageTorch(Thermal16bitImageTorch):
+    """16-bit thermal delivered as a PNG-compressed CompressedImage (e.g. FLIR ADK
+    `mono16; png compressed`). Decodes with cv2 (no cv_bridge), optionally rectifies via
+    camera_info, and PRESERVES the raw 16-bit values (no /255 -> uint8 truncation that the
+    8-bit CompressedImageTorch path would inflict on 16-bit data). On-disk format (16-bit PNG)
+    and from_kitti are inherited from Thermal16bitImageTorch.
+    """
+    from_rosmsg_type = CompressedImage
+
+    def from_rosmsg(msg, device="cpu", camera_info_torch=None, rectify=False):
+        res = CompressedThermal16bitImageTorch(device)
+        img = cv2.imdecode(np.frombuffer(msg.data, np.uint8), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError("Failed to decode compressed 16-bit thermal image")
+        # Rectify the 16-bit image in place (cv2.remap supports uint16).
+        if rectify and camera_info_torch is not None:
+            img = CompressedImageTorch._rectify_image(img, camera_info_torch)
+        if img.ndim == 2:
+            img = img[..., np.newaxis]
+        elif img.ndim == 3:
+            img = img[..., :1]
+        res.image = torch.from_numpy(img.astype(np.float32)).to(device)
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+
+class FeatureImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for feature images
     unlike ImageTorch, this class can take arbitrary image channels/features,

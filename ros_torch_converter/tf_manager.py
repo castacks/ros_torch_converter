@@ -302,19 +302,25 @@ class TfManager:
     
         return tf_manager
 
-    def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu'):
+    def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu', ros1=False):
         tf_manager = TfManager(device)
 
-        bag_fps = sorted([x for x in os.listdir(rosbag_fp) if '.mcap' in x])
+        # ROS1 bags are individual files (the per-sensor bags must be merged into one
+        # AnyReader); ROS2 bags are directories. Pick the matching extension + typestore.
+        ext = '.bag' if ros1 else '.mcap'
+        bag_fps = sorted([x for x in os.listdir(rosbag_fp) if x.endswith(ext)])
 
         #have every frame keep track of tf to its parent
         frames = {}
 
-        bagpath = Path(rosbag_fp)
+        if ros1:
+            bag_paths = [Path(rosbag_fp) / x for x in bag_fps]
+        else:
+            bag_paths = [Path(rosbag_fp)]
 
-        typestore = get_typestore(Stores.ROS2_HUMBLE)
+        typestore = get_typestore(Stores.ROS1_NOETIC if ros1 else Stores.ROS2_HUMBLE)
 
-        with AnyReader([bagpath], default_typestore=typestore) as reader:
+        with AnyReader(bag_paths, default_typestore=typestore) as reader:
             connections = [x for x in reader.connections if x.topic in ['/tf', '/tf_static']]
 
             cnt = 1

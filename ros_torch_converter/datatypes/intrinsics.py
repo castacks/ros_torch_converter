@@ -10,6 +10,16 @@ from sensor_msgs.msg import CameraInfo
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
+
+def _cam_field(msg, *names):
+    """Return the first present attribute among `names`. ROS1 CameraInfo uses uppercase
+    K/D/R/P; ROS2 uses lowercase k/d/r/p. rosbags preserves the source casing, so accept both."""
+    for n in names:
+        if hasattr(msg, n):
+            return getattr(msg, n)
+    raise AttributeError("CameraInfo missing any of {}".format(names))
+
+
 class IntrinsicsTorch(TorchCoordinatorDataType):
     """
     Class for camera info. This consists of a 3x3 intrinsics matrix
@@ -26,9 +36,9 @@ class IntrinsicsTorch(TorchCoordinatorDataType):
     def from_rosmsg(msg, use_p=True, device='cpu'):
         res = IntrinsicsTorch(device=device)
         if use_p:
-            res.intrinsics = torch.tensor(msg.p, device=device).reshape(3, 4)[:3, :3]
+            res.intrinsics = torch.tensor(_cam_field(msg, 'p', 'P'), device=device).reshape(3, 4)[:3, :3]
         else:
-            res.intrinsics = torch.tensor(msg.k, device=device).reshape(3, 3)
+            res.intrinsics = torch.tensor(_cam_field(msg, 'k', 'K'), device=device).reshape(3, 3)
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
         return res
@@ -135,10 +145,10 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = CameraInfoTorch(device=device)
-        res.k = torch.tensor(msg.k, device=device, dtype=torch.float32).reshape(3, 3)
-        res.d = torch.tensor(msg.d, device=device, dtype=torch.float32)
-        res.r = torch.tensor(msg.r, device=device, dtype=torch.float32).reshape(3, 3)
-        res.p = torch.tensor(msg.p, device=device, dtype=torch.float32).reshape(3, 4)
+        res.k = torch.tensor(_cam_field(msg, 'k', 'K'), device=device, dtype=torch.float32).reshape(3, 3)
+        res.d = torch.tensor(_cam_field(msg, 'd', 'D'), device=device, dtype=torch.float32)
+        res.r = torch.tensor(_cam_field(msg, 'r', 'R'), device=device, dtype=torch.float32).reshape(3, 3)
+        res.p = torch.tensor(_cam_field(msg, 'p', 'P'), device=device, dtype=torch.float32).reshape(3, 4)
         res.distortion_model = msg.distortion_model
         res.width = msg.width
         res.height = msg.height

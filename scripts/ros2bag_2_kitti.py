@@ -72,6 +72,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
+    parser.add_argument('--ros1', action='store_true', help='read ROS1 .bag files (merges all per-sensor .bag files in src_dir) instead of ROS2 mcap. Default: autodetect by extension.')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -116,15 +117,31 @@ if __name__ == '__main__':
     
     print("All message types have converters available ✓")
 
-    bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
+    # Autodetect ROS1 if not explicitly set: ROS1 src_dirs hold .bag files,
+    # ROS2 src_dirs are rosbag2 dirs containing .mcap.
+    ros1 = args.ros1
+    if not ros1:
+        has_bag = any(x.endswith('.bag') for x in os.listdir(args.src_dir))
+        has_mcap = any('.mcap' in x for x in os.listdir(args.src_dir))
+        if has_bag and not has_mcap:
+            ros1 = True
+            print('autodetected ROS1 .bag files in src_dir')
+
+    ext = '.bag' if ros1 else '.mcap'
+    bag_fps = sorted([x for x in os.listdir(args.src_dir) if x.endswith(ext)] if ros1
+                     else [x for x in os.listdir(args.src_dir) if '.mcap' in x])
 
     print('processing these bags:')
     for bfp in bag_fps:
         print('\t' + bfp)
 
-    bagpath = Path(args.src_dir)
+    # ROS1: pass the list of .bag files (AnyReader merges them); ROS2: pass the dir.
+    if ros1:
+        bag_paths = [Path(args.src_dir) / x for x in bag_fps]
+    else:
+        bag_paths = [Path(args.src_dir)]
 
-    typestore = get_typestore(Stores.ROS2_HUMBLE)
+    typestore = get_typestore(Stores.ROS1_NOETIC if ros1 else Stores.ROS2_HUMBLE)
 
     frame_list = set()
 
@@ -149,7 +166,7 @@ if __name__ == '__main__':
             exit(0)
 
     print('checking timestamps...')
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
+    with AnyReader(bag_paths, default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
 
         assert check_connections(connections, target_topics), "missing topics"
@@ -202,7 +219,7 @@ if __name__ == '__main__':
         tf_tmax = np.inf
     else:
         print('handling tf...')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+        tf_manager = TfManager.from_rosbag(args.src_dir, device='cuda', ros1=ros1)
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
@@ -287,7 +304,7 @@ if __name__ == '__main__':
     pbars = {k:tqdm.tqdm(desc=k, total=all_valid_mask.sum(), position=i) for i,k in enumerate(cvt_info.keys())}
     interp_buf = {k:[] for k in topics_to_interp}
 
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
+    with AnyReader(bag_paths, default_typestore=typestore) as reader:
         # If rectification is requested, collect camera_info messages
         if args.rectify:
             # Cache for camera_info messages
@@ -341,8 +358,8 @@ if __name__ == '__main__':
                     torch_data = torch_dtype.from_rosmsg(msg)
                     
                     camera_info_torch = None
-                    # Check if we should rectify this image
-                    if args.rectify and _cinfo['msgtype'] == 'CompressedImage':
+                    # Check if we should rectify this image (8-bit or 16-bit compressed image types)
+                    if args.rectify and _cinfo['msgtype'] in ('CompressedImage', 'Thermal16bitCompressedImage'):
                         # Try to find a matching camera_info topic
                         # Assume camera_info topic is same base topic with /camera_info suffix
                         base_topic = topic.replace('/image_raw/compressed', '').replace('/image/compressed', '').replace('/compressed', '')

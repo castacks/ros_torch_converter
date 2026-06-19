@@ -1,73 +1,84 @@
 import copy
+import warnings
+import importlib
 
-from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
-from message_filters import ApproximateTimeSynchronizer, Subscriber
+# Live-node-only deps (rclpy/message_filters). Needed when running the ROS2 ROSTorchConverter
+# node, but NOT for offline ROS1-bag -> KITTI conversion. Guard them so the offline path
+# (which only needs `str_to_cvt_class`) imports without a ROS install.
+try:
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from message_filters import ApproximateTimeSynchronizer, Subscriber
+except Exception:  # pragma: no cover - offline path
+    Node = object
+    qos_profile_sensor_data = None
+    ApproximateTimeSynchronizer = Subscriber = None
 
-from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
-from ros_torch_converter.datatypes.float import Float32Torch
-from ros_torch_converter.datatypes.bool import BoolTorch
-from ros_torch_converter.datatypes.command import CommandTorch
-from ros_torch_converter.datatypes.racepak import PedalPosTorch, ShockPosTorch, WheelRPMTorch
-from ros_torch_converter.datatypes.mppi_solution import MPPISolutionTorch
-from ros_torch_converter.datatypes.image import (
-    ImageTorch,
-    CompressedImageTorch,
-    FeatureImageTorch,
-    ThermalImageTorch,
-    Thermal16bitImageTorch,
-)
-from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch, CameraInfoTorch
-from ros_torch_converter.datatypes.pointcloud import (
-    PointCloudTorch,
-    FeaturePointCloudTorch,
-)
-from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
-from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
-from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
-from ros_torch_converter.datatypes.path import PathTorch
-from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
-from ros_torch_converter.datatypes.sensor_msgs import (
-    ImuTorch,
-    NavSatFixTorch,
-    PoseWithCovarianceTorch,
-    TwistTorch,
-    FFCStatusTorch,
-)
+try:
+    from tartandriver_utils.ros_utils import stamp_to_time
+except Exception:  # pragma: no cover
+    stamp_to_time = None
 
-from tartandriver_utils.ros_utils import stamp_to_time
 
-str_to_cvt_class = {
-    "BEVGrid": BEVGridTorch,
-    "GridMap": BEVGridTorch,  # GridMap is handled by BEVGridTorch
-    "Float32": Float32Torch,
-    "Bool": BoolTorch,
-    "Command": CommandTorch,
-    "PedalPos": PedalPosTorch,
-    "ShockPos": ShockPosTorch,
-    "WheelRPM": WheelRPMTorch,
-    "MPPISolution": MPPISolutionTorch,
-    "Image": ImageTorch,
-    "CompressedImage": CompressedImageTorch,
-    "FeatureImage": FeatureImageTorch,
-    "ThermalImage": ThermalImageTorch,
-    "Thermal16bitImage": Thermal16bitImageTorch,
-    "Intrinsics": IntrinsicsTorch,
-    "CameraInfo": CameraInfoTorch,
-    "PointCloud": PointCloudTorch,
-    "FeaturePointCloud": FeaturePointCloudTorch,
-    "Transform": TransformTorch,
-    "OdomTransform": OdomTransformTorch,
-    "OdomRBState": OdomRBStateTorch,
-    "GoalArray": GoalArrayTorch,
-    "Path": PathTorch,
-    "VoxelGrid": VoxelGridTorch,
-    "Imu": ImuTorch,
-    "NavSatFix": NavSatFixTorch,
-    "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
-    "TwistStamped": TwistTorch,
-    "FFCStatus": FFCStatusTorch,
+def _opt_import(modpath, *names):
+    """Import `names` from `modpath`, returning {name: obj}. If the module can't be imported
+    (e.g. its exotic ROS/C++ deps like ros2_numpy_cpp are absent in an offline, ROS-free env),
+    warn and return {} so the datatypes that DO import remain usable. This lets ROS1->KITTI
+    conversion run with only the converters its config actually references."""
+    try:
+        mod = importlib.import_module(modpath)
+        return {n: getattr(mod, n) for n in names}
+    except Exception as e:  # pragma: no cover - offline path
+        warnings.warn("ros_torch_converter: datatype module '{}' unavailable ({}: {}); "
+                      "its converters will be skipped.".format(modpath, type(e).__name__, e))
+        return {}
+
+
+# name(s) registered in str_to_cvt_class -> (module path, class name)
+_REGISTRY_SPEC = {
+    "BEVGrid": ("ros_torch_converter.datatypes.bev_grid", "BEVGridTorch"),
+    "GridMap": ("ros_torch_converter.datatypes.bev_grid", "BEVGridTorch"),
+    "Float32": ("ros_torch_converter.datatypes.float", "Float32Torch"),
+    "Bool": ("ros_torch_converter.datatypes.bool", "BoolTorch"),
+    "Command": ("ros_torch_converter.datatypes.command", "CommandTorch"),
+    "PedalPos": ("ros_torch_converter.datatypes.racepak", "PedalPosTorch"),
+    "ShockPos": ("ros_torch_converter.datatypes.racepak", "ShockPosTorch"),
+    "WheelRPM": ("ros_torch_converter.datatypes.racepak", "WheelRPMTorch"),
+    "MPPISolution": ("ros_torch_converter.datatypes.mppi_solution", "MPPISolutionTorch"),
+    "Image": ("ros_torch_converter.datatypes.image", "ImageTorch"),
+    "CompressedImage": ("ros_torch_converter.datatypes.image", "CompressedImageTorch"),
+    "FeatureImage": ("ros_torch_converter.datatypes.image", "FeatureImageTorch"),
+    "ThermalImage": ("ros_torch_converter.datatypes.image", "ThermalImageTorch"),
+    "Thermal16bitImage": ("ros_torch_converter.datatypes.image", "Thermal16bitImageTorch"),
+    "Thermal16bitCompressedImage": ("ros_torch_converter.datatypes.image", "CompressedThermal16bitImageTorch"),
+    "DepthImage": ("ros_torch_converter.datatypes.depth", "DepthImageTorch"),
+    "Intrinsics": ("ros_torch_converter.datatypes.intrinsics", "IntrinsicsTorch"),
+    "CameraInfo": ("ros_torch_converter.datatypes.intrinsics", "CameraInfoTorch"),
+    "PointCloud": ("ros_torch_converter.datatypes.pointcloud", "PointCloudTorch"),
+    "FeaturePointCloud": ("ros_torch_converter.datatypes.pointcloud", "FeaturePointCloudTorch"),
+    "Transform": ("ros_torch_converter.datatypes.transform", "TransformTorch"),
+    "OdomTransform": ("ros_torch_converter.datatypes.transform", "OdomTransformTorch"),
+    "OdomRBState": ("ros_torch_converter.datatypes.rb_state", "OdomRBStateTorch"),
+    "GoalArray": ("ros_torch_converter.datatypes.goal_array", "GoalArrayTorch"),
+    "Path": ("ros_torch_converter.datatypes.path", "PathTorch"),
+    "VoxelGrid": ("ros_torch_converter.datatypes.voxel_grid", "VoxelGridTorch"),
+    "Imu": ("ros_torch_converter.datatypes.sensor_msgs", "ImuTorch"),
+    "NavSatFix": ("ros_torch_converter.datatypes.sensor_msgs", "NavSatFixTorch"),
+    "PoseWithCovarianceStamped": ("ros_torch_converter.datatypes.sensor_msgs", "PoseWithCovarianceTorch"),
+    "TwistStamped": ("ros_torch_converter.datatypes.sensor_msgs", "TwistTorch"),
+    "FFCStatus": ("ros_torch_converter.datatypes.sensor_msgs", "FFCStatusTorch"),
 }
+
+# Cache per-module imports so each module is only attempted once.
+_module_cache = {}
+str_to_cvt_class = {}
+for _key, (_mod, _cls) in _REGISTRY_SPEC.items():
+    if _mod not in _module_cache:
+        _module_cache[_mod] = _opt_import(_mod, *[
+            c for k, (m, c) in _REGISTRY_SPEC.items() if m == _mod
+        ])
+    if _cls in _module_cache[_mod]:
+        str_to_cvt_class[_key] = _module_cache[_mod][_cls]
 
 
 class ROSTorchConverter(Node):
