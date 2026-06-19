@@ -1,7 +1,7 @@
 image_dir: image_left_rect
 pointcloud_dir: pointcloud_in_odom
-depth_output_dir: slam_depth_rgb_stack20_temp
-pose_output_dir: camera_poses_rgb_temp
+depth_output_dir: slam_depth_rgb_stack20
+pose_output_dir: camera_poses_rgb
 mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_mapping/data/masks/yamaha/image_left_color_mask.png
 
 intrinsics: #fx,fy,cx,cy
