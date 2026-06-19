@@ -92,6 +92,9 @@ if __name__ == '__main__':
             'group': tconf['group'],
             'topic': tconf['topic'],
             'msgtype': tconf['type'],
+            # per-topic rectify override (default True); lets e.g. RGB be rectified while
+            # thermal is kept raw in the same run when global --rectify is set.
+            'rectify': tconf.get('rectify', True),
             'dir': os.path.join(args.dst_dir, tconf['group'], tconf['name'])
         }
 
@@ -358,8 +361,9 @@ if __name__ == '__main__':
                     torch_data = torch_dtype.from_rosmsg(msg)
                     
                     camera_info_torch = None
-                    # Check if we should rectify this image (8-bit or 16-bit compressed image types)
-                    if args.rectify and _cinfo['msgtype'] in ('CompressedImage', 'Thermal16bitCompressedImage'):
+                    # Rectify this image only if the global flag is set, the per-topic override is
+                    # not disabled, and it's a compressed image type with a camera_info.
+                    if args.rectify and _cinfo.get('rectify', True) and _cinfo['msgtype'] in ('CompressedImage', 'Thermal16bitCompressedImage'):
                         # Try to find a matching camera_info topic
                         # Assume camera_info topic is same base topic with /camera_info suffix
                         base_topic = topic.replace('/image_raw/compressed', '').replace('/image/compressed', '').replace('/compressed', '')

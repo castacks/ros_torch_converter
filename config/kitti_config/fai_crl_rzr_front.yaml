@@ -2,9 +2,10 @@
 # Flat, self-contained KITTI extraction config for the FAI crl_rzr ROS1 bags
 # (front MultiSense + FLIR ADK). No !include / $TARTANDRIVER_HOME so plain load_yaml works.
 #
-# Run with ros2bag_2_kitti.py --ros1 --rectify. Thermal/RGB (CompressedImage) are rectified
-# via their camera_info; openni depth (DepthImage) is already rectified in the left frame and
-# is left untouched. TF (/tf,/tf_static) is auto-extracted by TfManager (no topic entry).
+# Run with ros2bag_2_kitti.py --ros1 --rectify. RGB is rectified via its camera_info; thermal is
+# kept RAW (rectify: false — undistort later with `fai_extractor rectify` if needed); openni depth
+# (DepthImage) is already rectified in the left frame and is left untouched. TF (/tf,/tf_static) is
+# auto-extracted by TfManager (no topic entry).
 #
 # Sync grid: dt=0.1s (= RGB/depth ~10Hz native rate) gives tight RGB<->thermal pairing;
 # thermal (~2Hz) is held forward up to interp_tol. The alignment step re-matches the nearest
@@ -20,7 +21,8 @@ topics:
   - name: thermal
     group: flir_adk
     topic: /crl_rzr/flir_adk/image_raw/compressed
-    type: Thermal16bitCompressedImage   # 16-bit-preserving + rectified (mono16 png)
+    type: Thermal16bitCompressedImage   # 16-bit-preserving (mono16 png)
+    rectify: false                      # keep thermal RAW; rectify later (fai_extractor rectify) if needed
     max_age: 1.
     args: {}
   - name: thermal_info
