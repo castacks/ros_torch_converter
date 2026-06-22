@@ -6,7 +6,10 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
+from ros_torch_converter.datatypes.bool import BoolTorch
 from ros_torch_converter.datatypes.command import CommandTorch
+from ros_torch_converter.datatypes.racepak import PedalPosTorch, ShockPosTorch, WheelRPMTorch
+from ros_torch_converter.datatypes.mppi_solution import MPPISolutionTorch
 from ros_torch_converter.datatypes.image import (
     ImageTorch,
     CompressedImageTorch,
@@ -39,7 +42,12 @@ str_to_cvt_class = {
     "BEVGrid": BEVGridTorch,
     "GridMap": BEVGridTorch,  # GridMap is handled by BEVGridTorch
     "Float32": Float32Torch,
+    "Bool": BoolTorch,
     "Command": CommandTorch,
+    "PedalPos": PedalPosTorch,
+    "ShockPos": ShockPosTorch,
+    "WheelRPM": WheelRPMTorch,
+    "MPPISolution": MPPISolutionTorch,
     "Image": ImageTorch,
     "CompressedImage": CompressedImageTorch,
     "FeatureImage": FeatureImageTorch,

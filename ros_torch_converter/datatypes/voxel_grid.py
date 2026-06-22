@@ -131,7 +131,9 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             'hits': self.voxel_grid.hits.cpu().numpy(),
             'misses': self.voxel_grid.misses.cpu().numpy(),
             'min_coords': self.voxel_grid.min_coords.cpu().numpy(),
-            'max_coords': self.voxel_grid.max_coords.cpu().numpy()
+            'max_coords': self.voxel_grid.max_coords.cpu().numpy(),
+            'first_update_time': self.voxel_grid.first_update_time.cpu().numpy(),
+            'last_update_time': self.voxel_grid.last_update_time.cpu().numpy(),
         } 
 
         if hdf5:
@@ -201,6 +203,15 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
         voxel_grid.min_coords = torch.tensor(voxel_data['min_coords'], dtype=torch.float, device=device)
         voxel_grid.max_coords = torch.tensor(voxel_data['max_coords'], dtype=torch.float, device=device)
+
+        ## add backwards compatability for now ##
+        if 'first_update_time' in voxel_data.keys():
+            voxel_grid.first_update_time = torch.tensor(voxel_data['first_update_time'], dtype=torch.double, device=device)
+            voxel_grid.last_update_time = torch.tensor(voxel_data['last_update_time'], dtype=torch.double, device=device)
+        else:
+            voxel_grid.first_update_time = -torch.ones(voxel_grid.raster_indices.shape[0], dtype=torch.double, device=device)
+            voxel_grid.last_update_time = -torch.ones(voxel_grid.raster_indices.shape[0], dtype=torch.double, device=device)
+        
         voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
