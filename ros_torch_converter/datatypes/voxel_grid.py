@@ -6,6 +6,7 @@ from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 
 from physics_atv_visual_mapping.localmapping.voxel.voxel_localmapper import VoxelGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
+from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 from physics_atv_visual_mapping.utils import normalize_dino
 
 from sensor_msgs.msg import PointCloud2, PointField
@@ -66,7 +67,14 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             device=device,
         )
         n_feat = int(msg.num_features) if int(msg.num_features) > 0 else 1
-        vg = VoxelGrid(md, n_feat, device)
+        if len(getattr(msg, "feature_keys", [])) == n_feat:
+            try:
+                feature_keys = FeatureKeyList.load(list(msg.feature_keys))
+            except Exception:
+                feature_keys = list(msg.feature_keys)
+        else:
+            feature_keys = n_feat
+        vg = VoxelGrid(md, feature_keys, device)
         if len(msg.indices) == 0:
             res = VoxelGridTorch(device=device)
             res.voxel_grid = vg
@@ -187,7 +195,10 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         if feature_keys is not None:
             msg.feature_keys = list(feature_keys)
         elif getattr(vg, "feature_keys", None):
-            msg.feature_keys = [str(k) for k in vg.feature_keys]
+            if hasattr(vg.feature_keys, "dump"):
+                msg.feature_keys = vg.feature_keys.dump()
+            else:
+                msg.feature_keys = [str(k) for k in vg.feature_keys]
         else:
             msg.feature_keys = ["f{}".format(i) for i in range(nf)]
 

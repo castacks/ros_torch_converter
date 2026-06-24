@@ -230,14 +230,16 @@ class FeatureImageTorch(TorchCoordinatorDataType):
     def __init__(self, device):
         super().__init__()
         self.image = torch.zeros(0,0,3, device=device)
+        self.feature_keys = None
         self.device = device
 
-    def from_torch(image):
+    def from_torch(image, feature_keys=None):
         if image.dtype != torch.float32:
             warnings.warn('Got image type that isnt float32!')
 
         res = FeatureImageTorch(device=image.device)
         res.image = image.float()
+        res.feature_keys = feature_keys
         return res
 
     def from_numpy(image, device):
@@ -246,6 +248,7 @@ class FeatureImageTorch(TorchCoordinatorDataType):
 
         res = FeatureImageTorch(device=device)
         res.image = torch.tensor(image, dtype=torch.float32, device=device)
+        res.feature_keys = None
         return res
     
     def from_rosmsg(msg, device):

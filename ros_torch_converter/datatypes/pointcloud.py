@@ -130,6 +130,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         self.pts = torch.zeros(0, 3, device=device)
         self.features = torch.zeros(0, 0, device=device)
         self.feat_mask = torch.zeros(0, device=device, dtype=torch.bool)
+        self.feature_keys = []
         self.device = device
 
     @property
@@ -145,7 +146,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         res = FeaturePointCloudTorch(device=device)
         return res
 
-    def from_torch(pts, features, mask):
+    def from_torch(pts, features, mask, feature_keys=None):
         assert len(mask) == len(pts), "expected len(mask) == len(pts)"
         assert mask.sum() == len(features), "expected mask.sum() == len(features)"
 
@@ -153,16 +154,22 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         res.pts = pts.float()
         res.features = features.float()
         res.feat_mask = mask.bool()
+        if feature_keys is None:
+            feature_keys = ["feature_{}".format(i) for i in range(features.shape[-1])]
+        res.feature_keys = feature_keys
         return res
     
-    def from_numpy(pts, features, mask, device):
+    def from_numpy(pts, features, mask, device, feature_keys=None):
         assert len(mask) == len(pts), "expected len(mask) == len(pts)"
         assert mask.sum() == len(features), "expected mask.sum() == len(features)"
 
         res = FeaturePointCloudTorch(device=device)
-        res.pts = torch.from_numpy(pts, dtype=torch.float32, device=device)
-        res.features = torch.from_numpy(features, dtype=torch.float32, device=device)
-        res.feat_mask = torch.from_numpy(mask, dtype=torch.bool, device=device)
+        res.pts = torch.tensor(pts, dtype=torch.float32, device=device)
+        res.features = torch.tensor(features, dtype=torch.float32, device=device)
+        res.feat_mask = torch.tensor(mask, dtype=torch.bool, device=device)
+        if feature_keys is None:
+            feature_keys = ["feature_{}".format(i) for i in range(features.shape[-1])]
+        res.feature_keys = feature_keys
         return res
     
     def to_rosmsg(self):
@@ -183,6 +190,7 @@ class FeaturePointCloudTorch(TorchCoordinatorDataType):
         self.device=device
         self.pts = self.pts.to(device)
         self.features = self.features.to(device)
+        self.feat_mask = self.feat_mask.to(device)
         return self
     
 
