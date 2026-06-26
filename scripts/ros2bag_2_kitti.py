@@ -72,6 +72,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
+    parser.add_argument('--no_render_video', action='store_true', help='skip video rendering after conversion')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -384,3 +385,15 @@ if __name__ == '__main__':
     for topic, idxs in checks.items():
         valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
         print('{} has all frames: {}'.format(topic, valid), flush=True)
+
+    if not args.no_render_video:
+        from tartandriver_utils.video_utils import render_kitti_video
+        print('\nRendering videos...')
+        viz_dir = os.path.join(args.dst_dir, 'viz')
+        os.makedirs(viz_dir, exist_ok=True)
+        for cinfo in cvt_info.values():
+            video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
+            output_path = os.path.join(viz_dir, video_name)
+            v = render_kitti_video(cinfo['dir'], output_path=output_path)
+            if v:
+                print(f'  {v}')

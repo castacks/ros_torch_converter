@@ -332,6 +332,7 @@ if __name__ == '__main__':
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--num_workers', type=str, default=None, help='number of parallel workers (default: min of entries and CPU cores, or "max" to use all CPU cores)')
     parser.add_argument('--color', action='store_true', help='use colored output for different topics')
+    parser.add_argument('--no_render_video', action='store_true', help='skip video rendering after conversion')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -680,5 +681,15 @@ if __name__ == '__main__':
             apply_color(grp_clr, interp_str)
         ])
     print(tabulate(rows, headers=['Status', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
+
+    if not args.no_render_video:
+        from tartandriver_utils.video_utils import render_kitti_video
+        print('\n6. Rendering videos...')
+        viz_dir = os.path.join(args.dst_dir, 'viz')
+        os.makedirs(viz_dir, exist_ok=True)
+        for cinfo in filt_cvt_info.values():
+            video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
+            output_path = os.path.join(viz_dir, video_name)
+            render_kitti_video(cinfo['dir'], output_path=output_path)
 
     print(f'\nDone processing {queue["target_times"].shape[0]} frames.')
