@@ -1,6 +1,4 @@
-"""
-OSMO dataset discovery + conversion pipeline driver.
-"""
+"""OSMO dataset discovery + conversion pipeline driver."""
 
 import argparse
 import json
@@ -16,23 +14,13 @@ from tartandriver_utils.os_utils import is_kitti_dir
 
 RCLONE_REMOTE = "airlab_storage"
 
-RCLONE_COPY_FLAGS = [
-    # Disables per-file multi-stream chunked downloads -- some FTP servers
-    # (including airlab_storage, per observed "Failed to copy: EOF" retries)
-    # handle concurrent range requests against a single file poorly.
-    "--multi-thread-streams=0",
-    # Transfer the several files in a run-dir (mcaps, metadata.yaml, ...) in
-    # parallel within one rclone invocation.
-    "--transfers=10",
-    # --progress uses carriage-return redraws meant for an interactive
-    # terminal, which gets mangled in captured/streamed task logs --
-    # periodic one-line stats are readable there instead.
-    "--stats=15s", "--stats-one-line",
-]
+# --multi-thread-streams=0: airlab_storage (FTP) mishandles chunked downloads.
+# --stats-one-line: avoid carriage-return redraws in captured task logs.
+RCLONE_FLAGS = ["--multi-thread-streams=0", "--transfers=10", "--stats=15s", "--stats-one-line"]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONVERTER_SCRIPT = os.path.join(SCRIPT_DIR, "ros2bag_2_kitti_multiproc.py")
-CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)  # .../ros_torch_converter/
+CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)
 
 
 def resolve_kitti_config(kitti_config):
@@ -41,12 +29,11 @@ def resolve_kitti_config(kitti_config):
     return os.path.join(CONVERTER_PACKAGE_DIR, kitti_config)
 
 
+def rclone_copy(src, dst):
+    subprocess.run(["rclone", "copy", src, dst] + RCLONE_FLAGS, check=True)
+
+
 def rclone_lsjson_recursive(remote_path):
-    """List an rclone remote path recursively; returns rclone's parsed JSON entries."""
-    # Only capture stdout (the JSON payload) -- let stderr inherit the
-    # process's own stderr so rclone's actual error message (auth failure,
-    # bad path, connection refused, ...) shows up in the task logs instead
-    # of being swallowed by a bare CalledProcessError.
     result = subprocess.run(
         ["rclone", "lsjson", "--recursive", remote_path],
         stdout=subprocess.PIPE, text=True, check=True,
@@ -55,14 +42,7 @@ def rclone_lsjson_recursive(remote_path):
 
 
 def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None):
-    """
-    Find run-dirs under `airlab_storage:<root_dir>` that look like a valid
-    rosbag dir (has metadata.yaml + >=1 *.mcap), at any depth. `root_dir` can
-    be a top-level root containing many date folders (<date>/<subfolder>/<run_dir>)
-    or a single date folder directly (<subfolder>/<run_dir>) -- no fixed
-    depth is assumed. A run-dir is skipped if any component of its relpath
-    (e.g. "calibration") is in `exclude_subdirs`, regardless of position.
-    """
+    """Find run-dirs under airlab_storage:root_dir with metadata.yaml + >=1 .mcap, at any depth."""
     entries = rclone_lsjson_recursive(f"{RCLONE_REMOTE}:{root_dir}")
 
     filenames_by_dir = {}
@@ -76,14 +56,9 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None):
     for relpath, filenames in filenames_by_dir.items():
         if limit_subfolder is not None and relpath != limit_subfolder:
             continue
-
-        parts = relpath.split("/")
-        if any(part in exclude_subdirs for part in parts):
+        if any(part in exclude_subdirs for part in relpath.split("/")):
             continue
-
-        has_metadata = "metadata.yaml" in filenames
-        has_mcaps = any(f.endswith(".mcap") for f in filenames)
-        if has_metadata and has_mcaps:
+        if "metadata.yaml" in filenames and any(f.endswith(".mcap") for f in filenames):
             run_dirs.append(relpath)
 
     return sorted(run_dirs)
@@ -104,11 +79,7 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
 
     try:
         print(f"[convert] {relpath}: copying raw bag from {RCLONE_REMOTE} ...")
-        subprocess.run(
-            ["rclone", "copy", f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir]
-            + RCLONE_COPY_FLAGS,
-            check=True,
-        )
+        rclone_copy(f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir)
 
         cmd = [
             sys.executable, CONVERTER_SCRIPT,
@@ -125,11 +96,7 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
             return relpath, False, f"conversion exited with code {proc.returncode}"
 
         print(f"[convert] {relpath}: copying result to {RCLONE_REMOTE}:{dst_dir} ...")
-        subprocess.run(
-            ["rclone", "copy", out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}"]
-            + RCLONE_COPY_FLAGS,
-            check=True,
-        )
+        rclone_copy(out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}")
         return relpath, True, None
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e)
@@ -137,21 +104,22 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
         shutil.rmtree(scratch_dir, ignore_errors=True)
 
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", required=True, help="rclone airlab_storage: path to scan -- either the top-level root (containing many date folders) or a single date folder directly")
+    parser.add_argument("--root_dir", required=True, help="rclone airlab_storage: root to scan for run-dirs")
     parser.add_argument("--dst_dir", required=True, help="rclone airlab_storage: path for the final KITTI copy-back")
-    parser.add_argument("--kitti_input_mount", required=True, help="local mount of the OSMO S3 kitti-output input ({{input:0}})")
-    parser.add_argument("--kitti_output_mount", required=True, help="local mount of the OSMO S3 kitti-output output ({{output}})")
-    parser.add_argument("--exclude_subdirs", default="calibration", help="comma-separated subfolder names to skip anywhere in the path (e.g. calibration), or 'none'/'' to exclude nothing")
+    parser.add_argument("--kitti_input_mount", required=True, help="local mount to check for already-converted datasets")
+    parser.add_argument("--kitti_output_mount", required=True, help="local mount to write converted datasets to")
+    parser.add_argument("--exclude_subdirs", default="calibration", help="comma-separated subfolder names to skip, or 'none'")
     parser.add_argument("--kitti_config", required=True, help="path to the ros_torch_converter kitti config yaml")
     parser.add_argument("--num_conversion_workers", type=int, default=4)
-    parser.add_argument("--converter_extra_args", default="", help="passthrough args for ros2bag_2_kitti_multiproc.py, e.g. '--render_video_hud'")
-    parser.add_argument(
-        "--limit_subfolder", default=None,
-        help="TEMPORARY: restrict discovery to this single run-dir relpath, for validating the pipeline end-to-end. Delete this flag once the pipeline is trusted.",
-    )
-    args = parser.parse_args()
+    parser.add_argument("--converter_extra_args", default="", help="passthrough args for ros2bag_2_kitti_multiproc.py")
+    parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
 
     if args.exclude_subdirs.strip().lower() in ("", "none"):
         exclude_subdirs = set()
