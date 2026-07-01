@@ -16,10 +16,19 @@ from tartandriver_utils.os_utils import is_kitti_dir
 
 RCLONE_REMOTE = "airlab_storage"
 
-# --progress uses carriage-return redraws meant for an interactive terminal,
-# which gets mangled in captured/streamed task logs -- periodic one-line
-# stats are readable there instead.
-RCLONE_PROGRESS_FLAGS = ["--stats=15s", "--stats-one-line"]
+RCLONE_COPY_FLAGS = [
+    # Disables per-file multi-stream chunked downloads -- some FTP servers
+    # (including airlab_storage, per observed "Failed to copy: EOF" retries)
+    # handle concurrent range requests against a single file poorly.
+    "--multi-thread-streams=0",
+    # Transfer the several files in a run-dir (mcaps, metadata.yaml, ...) in
+    # parallel within one rclone invocation.
+    "--transfers=10",
+    # --progress uses carriage-return redraws meant for an interactive
+    # terminal, which gets mangled in captured/streamed task logs --
+    # periodic one-line stats are readable there instead.
+    "--stats=15s", "--stats-one-line",
+]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONVERTER_SCRIPT = os.path.join(SCRIPT_DIR, "ros2bag_2_kitti_multiproc.py")
@@ -97,7 +106,7 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
         print(f"[convert] {relpath}: copying raw bag from {RCLONE_REMOTE} ...")
         subprocess.run(
             ["rclone", "copy", f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir]
-            + RCLONE_PROGRESS_FLAGS,
+            + RCLONE_COPY_FLAGS,
             check=True,
         )
 
@@ -118,7 +127,7 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
         print(f"[convert] {relpath}: copying result to {RCLONE_REMOTE}:{dst_dir} ...")
         subprocess.run(
             ["rclone", "copy", out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}"]
-            + RCLONE_PROGRESS_FLAGS,
+            + RCLONE_COPY_FLAGS,
             check=True,
         )
         return relpath, True, None
