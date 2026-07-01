@@ -16,6 +16,11 @@ from tartandriver_utils.os_utils import is_kitti_dir
 
 RCLONE_REMOTE = "airlab_storage"
 
+# --progress uses carriage-return redraws meant for an interactive terminal,
+# which gets mangled in captured/streamed task logs -- periodic one-line
+# stats are readable there instead.
+RCLONE_PROGRESS_FLAGS = ["--stats=15s", "--stats-one-line"]
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONVERTER_SCRIPT = os.path.join(SCRIPT_DIR, "ros2bag_2_kitti_multiproc.py")
 CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)  # .../ros_torch_converter/
@@ -89,8 +94,10 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
     os.makedirs(out_dir, exist_ok=True)
 
     try:
+        print(f"[convert] {relpath}: copying raw bag from {RCLONE_REMOTE} ...")
         subprocess.run(
-            ["rclone", "copy", f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir],
+            ["rclone", "copy", f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir]
+            + RCLONE_PROGRESS_FLAGS,
             check=True,
         )
 
@@ -108,8 +115,10 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
         if proc.returncode != 0:
             return relpath, False, f"conversion exited with code {proc.returncode}"
 
+        print(f"[convert] {relpath}: copying result to {RCLONE_REMOTE}:{dst_dir} ...")
         subprocess.run(
-            ["rclone", "copy", out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}"],
+            ["rclone", "copy", out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}"]
+            + RCLONE_PROGRESS_FLAGS,
             check=True,
         )
         return relpath, True, None
