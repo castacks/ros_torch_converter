@@ -60,6 +60,49 @@ def check_connections(connections, target_topics):
 
     return valid
 
+
+def collect_video_hud_odom(bagpath, typestore, odom_topic, use_bag_time=False):
+    """
+    Collect meter-frame odometry and speed for rendered video HUD overlays.
+    """
+    positions = []
+    times = []
+    speeds = []
+
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        bag_start_time = reader.start_time * 1e-9
+        connections = [x for x in reader.connections if x.topic == odom_topic]
+        if not connections:
+            print(f"  [hud] odom topic not found: {odom_topic}; rendering timestamp-only HUD")
+            return {
+                "gps_xy": np.zeros((0, 2), dtype=np.float64),
+                "gps_times": np.zeros((0,), dtype=np.float64),
+                "speed_mps": np.zeros((0,), dtype=np.float64),
+                "speed_times": np.zeros((0,), dtype=np.float64),
+                "bag_start_time": bag_start_time,
+            }
+
+        for connection, timestamp, rawdata in reader.messages(connections=connections):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            if hasattr(msg, "header") and not use_bag_time:
+                msg_time = stamp_to_time(msg.header.stamp)
+            else:
+                msg_time = timestamp * 1e-9
+
+            pos = msg.pose.pose.position
+            vel = msg.twist.twist.linear
+            positions.append([pos.x, pos.y])
+            times.append(msg_time)
+            speeds.append(np.linalg.norm([vel.x, vel.y, vel.z]))
+
+    return {
+        "gps_xy": np.asarray(positions, dtype=np.float64).reshape(-1, 2),
+        "gps_times": np.asarray(times, dtype=np.float64),
+        "speed_mps": np.asarray(speeds, dtype=np.float64),
+        "speed_times": np.asarray(times, dtype=np.float64),
+        "bag_start_time": bag_start_time,
+    }
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='path to config')
@@ -73,6 +116,12 @@ if __name__ == '__main__':
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--no_render_video', action='store_true', help='skip video rendering after conversion')
+    parser.add_argument('--render_video_hud', action='store_true', help='render timestamp/speed/minimap HUD on output videos')
+    parser.add_argument('--video_hud_odom_topic', type=str, default='/odometry/filtered_odom', help='odometry topic for video HUD speed and minimap')
+    parser.add_argument('--video_hud_map_tif', type=str, default=None, help='optional GeoTIFF map background for video HUD minimap')
+    parser.add_argument('--video_hud_map_source', type=str, default='auto', choices=['auto', 'tif', 'track', 'osm'], help='video HUD minimap source')
+    parser.add_argument('--video_hud_allow_network_tiles', action='store_true', help='allow network map tiles for video HUD when map source is osm')
+    parser.add_argument('--video_hud_workers', type=int, default=None, help='worker count for video HUD overlay rendering')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -387,13 +436,38 @@ if __name__ == '__main__':
         print('{} has all frames: {}'.format(topic, valid), flush=True)
 
     if not args.no_render_video:
-        from tartandriver_utils.video_utils import render_kitti_video
+        from tartandriver_utils.video_utils import render_kitti_video, render_kitti_video_with_hud
         print('\nRendering videos...')
         viz_dir = os.path.join(args.dst_dir, 'viz')
         os.makedirs(viz_dir, exist_ok=True)
+        hud_data = None
+        if args.render_video_hud:
+            print(f"  [hud] collecting odometry from {args.video_hud_odom_topic}")
+            hud_data = collect_video_hud_odom(
+                bagpath,
+                typestore,
+                args.video_hud_odom_topic,
+                use_bag_time=args.use_bag_time,
+            )
         for cinfo in cvt_info.values():
             video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
             output_path = os.path.join(viz_dir, video_name)
-            v = render_kitti_video(cinfo['dir'], output_path=output_path)
+            if args.render_video_hud:
+                v = render_kitti_video_with_hud(
+                    cinfo['dir'],
+                    output_path=output_path,
+                    gps_xy=hud_data["gps_xy"],
+                    gps_times=hud_data["gps_times"],
+                    speed_mps=hud_data["speed_mps"],
+                    speed_times=hud_data["speed_times"],
+                    bag_start_time=hud_data["bag_start_time"],
+                    overlay_root=os.path.join(viz_dir, 'overlays'),
+                    map_tif=args.video_hud_map_tif,
+                    map_source=args.video_hud_map_source,
+                    allow_network_tiles=args.video_hud_allow_network_tiles,
+                    n_workers=args.video_hud_workers,
+                )
+            else:
+                v = render_kitti_video(cinfo['dir'], output_path=output_path)
             if v:
                 print(f'  {v}')

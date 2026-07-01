@@ -125,6 +125,86 @@ def check_missing_types(config):
 
     print("All message types have converters available ✓")
 
+
+def collect_video_hud_odom(bagpath, typestore, odom_topic, use_bag_time=False):
+    """
+    Collect meter-frame odometry and speed for rendered video HUD overlays.
+    """
+    positions = []
+    times = []
+    speeds = []
+
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        bag_start_time = reader.start_time * 1e-9
+        connections = [x for x in reader.connections if x.topic == odom_topic]
+        if not connections:
+            print(f"  [hud] odom topic not found: {odom_topic}; rendering timestamp-only HUD")
+            return {
+                "gps_xy": np.zeros((0, 2), dtype=np.float64),
+                "gps_times": np.zeros((0,), dtype=np.float64),
+                "speed_mps": np.zeros((0,), dtype=np.float64),
+                "speed_times": np.zeros((0,), dtype=np.float64),
+                "bag_start_time": bag_start_time,
+            }
+
+        for connection, timestamp, rawdata in reader.messages(connections=connections):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            if hasattr(msg, "header") and not use_bag_time:
+                msg_time = stamp_to_time(msg.header.stamp)
+            else:
+                msg_time = timestamp * 1e-9
+
+            pos = msg.pose.pose.position
+            vel = msg.twist.twist.linear
+            positions.append([pos.x, pos.y])
+            times.append(msg_time)
+            speeds.append(np.linalg.norm([vel.x, vel.y, vel.z]))
+
+    return {
+        "gps_xy": np.asarray(positions, dtype=np.float64).reshape(-1, 2),
+        "gps_times": np.asarray(times, dtype=np.float64),
+        "speed_mps": np.asarray(speeds, dtype=np.float64),
+        "speed_times": np.asarray(times, dtype=np.float64),
+        "bag_start_time": bag_start_time,
+    }
+
+
+def collect_video_hud_pedal(bagpath, typestore, pedal_topic, use_bag_time=False):
+    """
+    Collect throttle/brake pedal positions for rendered video HUD overlays.
+    Expects a message with .throttle and .brake float fields (e.g. racepak RpControls).
+    """
+    throttle_vals = []
+    brake_vals = []
+    times = []
+
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        connections = [x for x in reader.connections if x.topic == pedal_topic]
+        if not connections:
+            print(f"  [hud] pedal topic not found: {pedal_topic}; throttle/brake HUD disabled")
+            return {
+                "throttle": np.zeros(0, dtype=np.float64),
+                "brake": np.zeros(0, dtype=np.float64),
+                "times": np.zeros(0, dtype=np.float64),
+            }
+
+        for connection, timestamp, rawdata in reader.messages(connections=connections):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            if hasattr(msg, "header") and not use_bag_time:
+                msg_time = stamp_to_time(msg.header.stamp)
+            else:
+                msg_time = timestamp * 1e-9
+            throttle_vals.append(float(msg.throttle))
+            brake_vals.append(float(msg.brake))
+            times.append(msg_time)
+
+    return {
+        "throttle": np.asarray(throttle_vals, dtype=np.float64),
+        "brake": np.asarray(brake_vals, dtype=np.float64),
+        "times": np.asarray(times, dtype=np.float64),
+    }
+
+
 def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_color=False):
     """
     Monitor and display progress in a live-updating dashboard style.
@@ -333,6 +413,13 @@ if __name__ == '__main__':
     parser.add_argument('--num_workers', type=str, default=None, help='number of parallel workers (default: min of entries and CPU cores, or "max" to use all CPU cores)')
     parser.add_argument('--color', action='store_true', help='use colored output for different topics')
     parser.add_argument('--no_render_video', action='store_true', help='skip video rendering after conversion')
+    parser.add_argument('--render_video_hud', action='store_true', help='render timestamp/speed/minimap HUD on output videos')
+    parser.add_argument('--video_hud_odom_topic', type=str, default='/odometry/filtered_odom', help='odometry topic for video HUD speed and minimap')
+    parser.add_argument('--video_hud_map_tif', type=str, default='src/core/mission_manager/gps_maps/gascola.tif', help='optional GeoTIFF map background for video HUD minimap')
+    parser.add_argument('--video_hud_map_source', type=str, default='auto', choices=['auto', 'tif', 'track', 'osm'], help='video HUD minimap source')
+    parser.add_argument('--video_hud_allow_network_tiles', action='store_true', help='allow network map tiles for video HUD when map source is osm')
+    parser.add_argument('--video_hud_workers', type=int, default=None, help='worker count for video HUD overlay rendering')
+    parser.add_argument('--video_hud_pedal_topic', type=str, default='/racepak/pedal_pos', help='pedal position topic for video HUD throttle/brake bars (must have .throttle and .brake fields)')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -683,13 +770,50 @@ if __name__ == '__main__':
     print(tabulate(rows, headers=['Status', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
 
     if not args.no_render_video:
-        from tartandriver_utils.video_utils import render_kitti_video
+        from tartandriver_utils.video_utils import render_kitti_video, render_kitti_video_with_hud
         print('\n6. Rendering videos...')
         viz_dir = os.path.join(args.dst_dir, 'viz')
         os.makedirs(viz_dir, exist_ok=True)
+        hud_data = None
+        pedal_data = None
+        if args.render_video_hud:
+            print(f"  [hud] collecting odometry from {args.video_hud_odom_topic}")
+            hud_data = collect_video_hud_odom(
+                bagpath,
+                typestore,
+                args.video_hud_odom_topic,
+                use_bag_time=args.use_bag_time,
+            )
+            print(f"  [hud] collecting pedal data from {args.video_hud_pedal_topic}")
+            pedal_data = collect_video_hud_pedal(
+                bagpath,
+                typestore,
+                args.video_hud_pedal_topic,
+                use_bag_time=args.use_bag_time,
+            )
         for cinfo in filt_cvt_info.values():
             video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
             output_path = os.path.join(viz_dir, video_name)
-            render_kitti_video(cinfo['dir'], output_path=output_path)
+            if args.render_video_hud:
+                render_kitti_video_with_hud(
+                    cinfo['dir'],
+                    output_path=output_path,
+                    gps_xy=hud_data["gps_xy"],
+                    gps_times=hud_data["gps_times"],
+                    speed_mps=hud_data["speed_mps"],
+                    speed_times=hud_data["speed_times"],
+                    bag_start_time=hud_data["bag_start_time"],
+                    overlay_root=os.path.join(viz_dir, 'overlays'),
+                    map_tif=args.video_hud_map_tif,
+                    map_source=args.video_hud_map_source,
+                    allow_network_tiles=args.video_hud_allow_network_tiles,
+                    n_workers=args.video_hud_workers,
+                    throttle_vals=pedal_data["throttle"] if pedal_data is not None else None,
+                    throttle_times=pedal_data["times"] if pedal_data is not None else None,
+                    brake_vals=pedal_data["brake"] if pedal_data is not None else None,
+                    brake_times=pedal_data["times"] if pedal_data is not None else None,
+                )
+            else:
+                render_kitti_video(cinfo['dir'], output_path=output_path)
 
     print(f'\nDone processing {queue["target_times"].shape[0]} frames.')
