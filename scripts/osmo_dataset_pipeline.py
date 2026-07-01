@@ -36,11 +36,14 @@ def rclone_lsjson_recursive(remote_path):
     return json.loads(result.stdout)
 
 
-def find_rosbag_run_dirs(root_dir, include_subdirs, limit_subfolder=None):
+def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None):
     """
-    Find run-dirs under `airlab_storage:<root_dir>/<date>/<subfolder>/<run_dir>`
-    that look like a valid rosbag dir (has metadata.yaml + >=1 *.mcap),
-    restricted to `include_subdirs`.
+    Find run-dirs under `airlab_storage:<root_dir>` that look like a valid
+    rosbag dir (has metadata.yaml + >=1 *.mcap), at any depth. `root_dir` can
+    be a top-level root containing many date folders (<date>/<subfolder>/<run_dir>)
+    or a single date folder directly (<subfolder>/<run_dir>) -- no fixed
+    depth is assumed. A run-dir is skipped if any component of its relpath
+    (e.g. "calibration") is in `exclude_subdirs`, regardless of position.
     """
     entries = rclone_lsjson_recursive(f"{RCLONE_REMOTE}:{root_dir}")
 
@@ -57,10 +60,7 @@ def find_rosbag_run_dirs(root_dir, include_subdirs, limit_subfolder=None):
             continue
 
         parts = relpath.split("/")
-        if len(parts) < 3:
-            continue  # expect <date>/<subfolder>/<run_dir>
-        subfolder = parts[1]
-        if subfolder not in include_subdirs:
+        if any(part in exclude_subdirs for part in parts):
             continue
 
         has_metadata = "metadata.yaml" in filenames
@@ -117,11 +117,11 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", required=True, help="rclone airlab_storage: path to the raw bag root")
+    parser.add_argument("--root_dir", required=True, help="rclone airlab_storage: path to scan -- either the top-level root (containing many date folders) or a single date folder directly")
     parser.add_argument("--dst_dir", required=True, help="rclone airlab_storage: path for the final KITTI copy-back")
     parser.add_argument("--kitti_input_mount", required=True, help="local mount of the OSMO S3 kitti-output input ({{input:0}})")
     parser.add_argument("--kitti_output_mount", required=True, help="local mount of the OSMO S3 kitti-output output ({{output}})")
-    parser.add_argument("--include_subdirs", required=True, help="comma-separated subfolder names to convert (e.g. auto,teleop)")
+    parser.add_argument("--exclude_subdirs", default="calibration", help="comma-separated subfolder names to skip anywhere in the path (e.g. calibration), or 'none'/'' to exclude nothing")
     parser.add_argument("--kitti_config", required=True, help="path to the ros_torch_converter kitti config yaml")
     parser.add_argument("--num_conversion_workers", type=int, default=4)
     parser.add_argument("--converter_extra_args", default="", help="passthrough args for ros2bag_2_kitti_multiproc.py, e.g. '--render_video_hud'")
@@ -131,10 +131,13 @@ def main():
     )
     args = parser.parse_args()
 
-    include_subdirs = {s.strip() for s in args.include_subdirs.split(",") if s.strip()}
+    if args.exclude_subdirs.strip().lower() in ("", "none"):
+        exclude_subdirs = set()
+    else:
+        exclude_subdirs = {s.strip() for s in args.exclude_subdirs.split(",") if s.strip()}
 
-    print(f"[discovery] scanning {RCLONE_REMOTE}:{args.root_dir} (include_subdirs={sorted(include_subdirs)})")
-    run_dirs = find_rosbag_run_dirs(args.root_dir, include_subdirs, limit_subfolder=args.limit_subfolder)
+    print(f"[discovery] scanning {RCLONE_REMOTE}:{args.root_dir} (exclude_subdirs={sorted(exclude_subdirs)})")
+    run_dirs = find_rosbag_run_dirs(args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
     pending = filter_unconverted(run_dirs, args.kitti_input_mount)
