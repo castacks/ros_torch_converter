@@ -29,9 +29,13 @@ def resolve_kitti_config(kitti_config):
 
 def rclone_lsjson_recursive(remote_path):
     """List an rclone remote path recursively; returns rclone's parsed JSON entries."""
+    # Only capture stdout (the JSON payload) -- let stderr inherit the
+    # process's own stderr so rclone's actual error message (auth failure,
+    # bad path, connection refused, ...) shows up in the task logs instead
+    # of being swallowed by a bare CalledProcessError.
     result = subprocess.run(
         ["rclone", "lsjson", "--recursive", remote_path],
-        capture_output=True, text=True, check=True,
+        stdout=subprocess.PIPE, text=True, check=True,
     )
     return json.loads(result.stdout)
 
