@@ -5,9 +5,17 @@ import torch
 import numpy as np
 
 from sensor_msgs.msg import PointCloud2, PointField
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension
+from geometry_msgs.msg import Vector3
+from perception_interfaces.msg import FeatureVoxelGrid, VoxelGridMetadata
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.utils import (
+    update_frame_file,
+    update_timestamp_file,
+    read_frame_file,
+    read_timestamp_file,
+)
 
 from physics_atv_visual_mapping.localmapping.voxel.voxel_localmapper import VoxelGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
@@ -16,6 +24,7 @@ from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from tartandriver_utils.os_utils import load_yaml, save_yaml
 from tartandriver_utils.ros_utils import time_to_stamp
+
 
 class VoxelGridTorch(TorchCoordinatorDataType):
     """
@@ -28,14 +37,84 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         super().__init__()
         self.voxel_grid = None
         self.device = device
+        # Indices touched by the latest lidar frame (forwarded by VoxelMapperNode
+        # for incremental normal recomputation). Empty when deserialized from
+        # FeatureVoxelGrid (over ROS we don't transmit this; recompute full).
+        self.last_touched_raster_indices = torch.zeros(0, dtype=torch.long, device=device)
 
     def from_voxel_grid(voxel_grid):
         res = VoxelGridTorch(device=voxel_grid.device)
         res.voxel_grid = voxel_grid
         return res
-    
-    def from_rosmsg(msg, feature_keys=[], device='cpu'):
+
+    def from_rosmsg(msg, feature_keys=None, device="cpu"):
+        # ROSTorchConverter may call from_rosmsg(msg, device_str) positionally.
+        if isinstance(feature_keys, str) and device == "cpu":
+            device = feature_keys
+            feature_keys = None
+        if isinstance(msg, FeatureVoxelGrid):
+            return VoxelGridTorch._from_feature_voxel_grid_msg(msg, device=device)
         return None
+
+    @staticmethod
+    def _from_feature_voxel_grid_msg(msg: FeatureVoxelGrid, device="cpu"):
+        md = LocalMapperMetadata(
+            origin=[
+                msg.metadata.origin.x,
+                msg.metadata.origin.y,
+                msg.metadata.origin.z,
+            ],
+            length=[
+                msg.metadata.length.x,
+                msg.metadata.length.y,
+                msg.metadata.length.z,
+            ],
+            resolution=[
+                msg.metadata.resolution.x,
+                msg.metadata.resolution.y,
+                msg.metadata.resolution.z,
+            ],
+            device=device,
+        )
+        n_feat = int(msg.num_features) if int(msg.num_features) > 0 else 1
+        try:
+            vg = VoxelGrid(md, n_feat, device)
+        except TypeError:
+            vg = VoxelGrid(md, n_features=n_feat, device=device)
+        if len(msg.indices) == 0:
+            res = VoxelGridTorch(device=device)
+            res.voxel_grid = vg
+            return res
+
+        idx = torch.tensor(list(msg.indices), dtype=torch.long, device=device)
+        n = idx.shape[0]
+        flat = np.array(msg.features.data, dtype=np.float32)
+        if flat.size != n * n_feat:
+            if flat.size == 0:
+                feats = torch.zeros(n, n_feat, dtype=torch.float32, device=device)
+            else:
+                feats = torch.from_numpy(
+                    flat.reshape(-1)[: n * n_feat].reshape(n, -1)
+                ).to(device)
+                if feats.shape[1] < n_feat:
+                    pad = torch.zeros(
+                        n,
+                        n_feat - feats.shape[1],
+                        device=device,
+                        dtype=feats.dtype,
+                    )
+                    feats = torch.cat([feats, pad], dim=1)
+        else:
+            feats = torch.from_numpy(flat.reshape(n, n_feat)).to(device)
+
+        vg.raster_indices = idx
+        vg.features = feats
+        vg.feature_mask = torch.ones(n, dtype=torch.bool, device=device)
+        vg.hits = torch.ones(n, dtype=torch.float32, device=device)
+        vg.misses = torch.zeros(n, dtype=torch.float32, device=device)
+        res = VoxelGridTorch(device=device)
+        res.voxel_grid = vg
+        return res
 
     def to_rosmsg(self, midpoints=True):
         """
@@ -45,10 +124,17 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         non_feature_idxs = self.voxel_grid.non_feature_raster_indices
 
         if midpoints:
-            all_pts = torch.cat([self.voxel_grid.feature_midpoints, self.voxel_grid.non_feature_midpoints])
+            all_pts = torch.cat(
+                [
+                    self.voxel_grid.feature_midpoints,
+                    self.voxel_grid.non_feature_midpoints,
+                ]
+            )
         else:
             all_idxs = torch.cat([feature_idxs, non_feature_idxs])
-            all_pts = self.voxel_grid.grid_indices_to_pts(self.voxel_grid.raster_indices_to_grid_indices(all_idxs))
+            all_pts = self.voxel_grid.grid_indices_to_pts(
+                self.voxel_grid.raster_indices_to_grid_indices(all_idxs)
+            )
 
         points = all_pts.cpu().numpy().astype(np.float32)
 
@@ -56,34 +142,43 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         msg.height = 1
         msg.width = points.shape[0]
         msg.point_step = 12
-
-        msg.fields = [PointField(name=n, offset=4*i, datatype=PointField.FLOAT32, count=msg.width) for i,n in enumerate('xyz')]
+        msg.fields = [
+            PointField(name=n, offset=4 * i, datatype=PointField.FLOAT32, count=1)
+            for i, n in enumerate("xyz")
+        ]
 
         data = points
 
         if self.voxel_grid.features.shape[1] >= 3 and self.voxel_grid.features.shape[0] > 0:
-            is_rgb = all([k in self.voxel_grid.feature_keys.label for k in 'rgb'])
+            is_rgb = all([k in self.voxel_grid.feature_keys.label for k in "rgb"])
 
             if is_rgb:
                 feature_colors = self.voxel_grid.features[:, :3]
             else:
                 feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
 
-            non_feature_colors = 0.8 * torch.ones(non_feature_idxs.shape[0], 3, device=self.device)
+            non_feature_colors = 0.8 * torch.ones(
+                non_feature_idxs.shape[0],
+                3,
+                device=self.device,
+            )
             all_colors = torch.cat([feature_colors, non_feature_colors], dim=0)
             colors = all_colors.cpu().numpy()
 
             msg.point_step += 4
-            msg.fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=msg.width))
+            msg.fields.append(
+                PointField(name="rgb", offset=12, datatype=PointField.FLOAT32, count=1)
+            )
 
             r = (colors[:, 0] * 255).astype(np.uint32)
             g = (colors[:, 1] * 255).astype(np.uint32)
             b = (colors[:, 2] * 255).astype(np.uint32)
-            rgb = (r<<16) | (g<<8) | (b<<0)
+            rgb = (r << 16) | (g << 8) | (b << 0)
             rgb.dtype = np.float32
 
             data = np.concatenate([data, rgb.reshape(-1, 1)], axis=-1)
 
+        msg.row_step = msg.point_step * msg.width
         data = data.flatten()
 
         # borrowing from https://github.com/Box-Robotics/ros2_numpy/blob/humble/ros2_numpy/point_cloud2.py
@@ -98,59 +193,129 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         as_array.frombytes(array_bytes)
 
         msg.data = as_array
-            
+
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
+        return msg
+
+    def to_feature_voxel_grid_msg(self, feature_keys=None):
+        """Serialize full occupied voxel set for 3D planning (sparse indices + features)."""
+        vg = self.voxel_grid
+        msg = FeatureVoxelGrid()
+        msg.header.stamp = time_to_stamp(self.stamp)
+        msg.header.frame_id = self.frame_id
+
+        msg.metadata = VoxelGridMetadata()
+        msg.metadata.origin = Vector3(
+            x=float(vg.metadata.origin[0].item()),
+            y=float(vg.metadata.origin[1].item()),
+            z=float(vg.metadata.origin[2].item()),
+        )
+        msg.metadata.length = Vector3(
+            x=float(vg.metadata.length[0].item()),
+            y=float(vg.metadata.length[1].item()),
+            z=float(vg.metadata.length[2].item()),
+        )
+        msg.metadata.resolution = Vector3(
+            x=float(vg.metadata.resolution[0].item()),
+            y=float(vg.metadata.resolution[1].item()),
+            z=float(vg.metadata.resolution[2].item()),
+        )
+
+        ri = vg.raster_indices.detach().cpu().tolist()
+        msg.num_voxels = len(ri)
+        nf = int(vg.features.shape[1]) if vg.features.numel() > 0 else 1
+        msg.num_features = nf
+
+        if feature_keys is not None:
+            msg.feature_keys = list(feature_keys)
+        elif getattr(vg, "feature_keys", None) is not None:
+            if hasattr(vg.feature_keys, "label"):
+                msg.feature_keys = [str(k) for k in vg.feature_keys.label]
+            else:
+                msg.feature_keys = [str(k) for k in vg.feature_keys]
+        else:
+            msg.feature_keys = ["f{}".format(i) for i in range(nf)]
+
+        msg.indices = [int(x) for x in ri]
+
+        feat_pad = torch.zeros(
+            vg.raster_indices.shape[0],
+            nf,
+            dtype=torch.float32,
+            device=vg.device,
+        )
+        if vg.features.numel() > 0:
+            feat_pad[vg.feature_mask] = vg.features.to(dtype=torch.float32)
+        flat = feat_pad.detach().cpu().numpy().reshape(-1).astype(np.float32)
+
+        fmsg = Float32MultiArray()
+        fmsg.layout.dim.append(MultiArrayDimension(label="nvox", size=len(ri), stride=nf))
+        fmsg.layout.dim.append(MultiArrayDimension(label="nf", size=nf, stride=1))
+        fmsg.data = flat.tolist()
+        msg.features = fmsg
         return msg
 
     def to_kitti(self, base_dir, idx, hdf5=False):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
 
-        ## move savable data to numpy
         metadata = {
-            'feature_keys': [
-                f"{label}, {meta}" for label, meta in zip(
+            "feature_keys": [
+                f"{label}, {meta}"
+                for label, meta in zip(
                     self.voxel_grid.feature_keys.label,
-                    self.voxel_grid.feature_keys.metainfo
+                    self.voxel_grid.feature_keys.metainfo,
                 )
             ],
-            'origin': self.voxel_grid.metadata.origin.tolist(),
-            'length': self.voxel_grid.metadata.length.tolist(),
-            'resolution': self.voxel_grid.metadata.resolution.tolist(),
+            "origin": self.voxel_grid.metadata.origin.tolist(),
+            "length": self.voxel_grid.metadata.length.tolist(),
+            "resolution": self.voxel_grid.metadata.resolution.tolist(),
         }
 
         data = {
-            'raster_indices': self.voxel_grid.raster_indices.cpu().numpy(),
-            'features': self.voxel_grid.features.cpu().numpy(),
-            'feature_mask': self.voxel_grid.feature_mask.cpu().numpy(),
-            'hits': self.voxel_grid.hits.cpu().numpy(),
-            'misses': self.voxel_grid.misses.cpu().numpy(),
-            'min_coords': self.voxel_grid.min_coords.cpu().numpy(),
-            'max_coords': self.voxel_grid.max_coords.cpu().numpy()
-        } 
+            "raster_indices": self.voxel_grid.raster_indices.cpu().numpy(),
+            "features": self.voxel_grid.features.cpu().numpy(),
+            "feature_mask": self.voxel_grid.feature_mask.cpu().numpy(),
+            "hits": self.voxel_grid.hits.cpu().numpy(),
+            "misses": self.voxel_grid.misses.cpu().numpy(),
+            "min_coords": self.voxel_grid.min_coords.cpu().numpy(),
+            "max_coords": self.voxel_grid.max_coords.cpu().numpy(),
+        }
 
         if hdf5:
             data_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
-            with h5py.File(data_fp, 'w') as h5_fp:
-                ## save data
-                h5_fp.create_group('data')
-                for k,v in data.items():
-                    ## TODO explore gzip vs. lzf, etc.
-                    h5_fp.create_dataset(f"data/{k}", data=v, compression='lzf')
+            with h5py.File(data_fp, "w") as h5_fp:
+                h5_fp.create_group("data")
+                for k, v in data.items():
+                    h5_fp.create_dataset(f"data/{k}", data=v, compression="lzf")
 
-                ## save metadata
-                h5_fp.create_group('metadata')
-                h5_fp.create_dataset("metadata/origin", data=metadata['origin'], dtype='float32')
-                h5_fp.create_dataset("metadata/length", data=metadata['length'], dtype='float32')
-                h5_fp.create_dataset("metadata/resolution", data=metadata['resolution'], dtype='float32')
+                h5_fp.create_group("metadata")
+                h5_fp.create_dataset(
+                    "metadata/origin", data=metadata["origin"], dtype="float32"
+                )
+                h5_fp.create_dataset(
+                    "metadata/length", data=metadata["length"], dtype="float32"
+                )
+                h5_fp.create_dataset(
+                    "metadata/resolution",
+                    data=metadata["resolution"],
+                    dtype="float32",
+                )
 
-                ## save feature keys
-                h5_fp.create_group('feature_keys')
-                h5_fp.create_dataset("feature_keys/label", data=self.voxel_grid.feature_keys.label, dtype=h5py.string_dtype())
-                h5_fp.create_dataset("feature_keys/metainfo", data=self.voxel_grid.feature_keys.metainfo, dtype=h5py.string_dtype())
+                h5_fp.create_group("feature_keys")
+                h5_fp.create_dataset(
+                    "feature_keys/label",
+                    data=self.voxel_grid.feature_keys.label,
+                    dtype=h5py.string_dtype(),
+                )
+                h5_fp.create_dataset(
+                    "feature_keys/metainfo",
+                    data=self.voxel_grid.feature_keys.metainfo,
+                    dtype=h5py.string_dtype(),
+                )
 
         else:
             data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
@@ -159,66 +324,92 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             save_yaml(metadata, metadata_fp)
             np.savez(data_fp, **data)
 
-    def from_kitti(base_dir, idx, device='cpu'):
+    def from_kitti(base_dir, idx, device="cpu"):
         """define how to convert this dtype from a kitti file
         """
-        ## load data from file
         h5_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
 
         if os.path.exists(h5_fp):
             with h5py.File(h5_fp, "r") as h5_fp:
-                metadata = {k:np.array(v) for k,v in h5_fp["metadata"].items()}
-                labels = [x.decode() for x in h5_fp['feature_keys']['label']]
-                metas = [x.decode() for x in h5_fp['feature_keys']['metainfo']]
-                voxel_data = {k:np.array(v) for k,v in h5_fp["data"].items()}
+                metadata = {k: np.array(v) for k, v in h5_fp["metadata"].items()}
+                labels = [x.decode() for x in h5_fp["feature_keys"]["label"]]
+                metas = [x.decode() for x in h5_fp["feature_keys"]["metainfo"]]
+                voxel_data = {k: np.array(v) for k, v in h5_fp["data"].items()}
 
         else:
             metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
             metadata = load_yaml(metadata_fp)
 
-            if metadata['feature_keys']:
-                labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+            if metadata["feature_keys"]:
+                labels, metas = zip(*[s.split(", ") for s in metadata["feature_keys"]])
             else:
                 labels, metas = [], []
 
             data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
             voxel_data = np.load(data_fp)
 
-        ## create/populate VoxelGrid object
         feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
-        
+
         metadata = LocalMapperMetadata(
-            origin=metadata['origin'],
-            length=metadata['length'],
-            resolution=metadata['resolution'],
-            device=device
+            origin=metadata["origin"],
+            length=metadata["length"],
+            resolution=metadata["resolution"],
+            device=device,
         )
 
         voxel_grid = VoxelGrid(metadata, feature_keys=feature_keys, device=device)
-        voxel_grid.raster_indices = torch.tensor(voxel_data['raster_indices'], dtype=torch.long, device=device)
-        voxel_grid.features = torch.tensor(voxel_data['features'], dtype=torch.float, device=device)
-        voxel_grid.feature_mask = torch.tensor(voxel_data['feature_mask'], dtype=torch.bool, device=device)
-        voxel_grid.hits = torch.tensor(voxel_data['hits'], dtype=torch.long, device=device)
-        voxel_grid.misses = torch.tensor(voxel_data['misses'], dtype=torch.long, device=device)
-        voxel_grid.min_coords = torch.tensor(voxel_data['min_coords'], dtype=torch.float, device=device)
-        voxel_grid.max_coords = torch.tensor(voxel_data['max_coords'], dtype=torch.float, device=device)
+        voxel_grid.raster_indices = torch.tensor(
+            voxel_data["raster_indices"],
+            dtype=torch.long,
+            device=device,
+        )
+        voxel_grid.features = torch.tensor(
+            voxel_data["features"],
+            dtype=torch.float,
+            device=device,
+        )
+        voxel_grid.feature_mask = torch.tensor(
+            voxel_data["feature_mask"],
+            dtype=torch.bool,
+            device=device,
+        )
+        voxel_grid.hits = torch.tensor(
+            voxel_data["hits"],
+            dtype=torch.long,
+            device=device,
+        )
+        voxel_grid.misses = torch.tensor(
+            voxel_data["misses"],
+            dtype=torch.long,
+            device=device,
+        )
+        voxel_grid.min_coords = torch.tensor(
+            voxel_data["min_coords"],
+            dtype=torch.float,
+            device=device,
+        )
+        voxel_grid.max_coords = torch.tensor(
+            voxel_data["max_coords"],
+            dtype=torch.float,
+            device=device,
+        )
         voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
         vgt.voxel_grid = voxel_grid
 
         vgt.stamp = read_timestamp_file(base_dir, idx)
-        vgt.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        vgt.frame_id = read_frame_file(base_dir, idx, "frame_id")
 
         return vgt
 
-    def rand_init(device='cpu'):
+    def rand_init(device="cpu"):
         voxel_grid = VoxelGrid.random_init()
 
         vgt = VoxelGridTorch.from_voxel_grid(voxel_grid)
-        vgt.frame_id = 'random'
+        vgt.frame_id = "random"
         vgt.stamp = np.random.rand()
-        
+
         return vgt
 
     def __eq__(self, other):
@@ -237,6 +428,16 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         self.device = device
         self.voxel_grid = self.voxel_grid.to(device)
         return self
-    
+
     def __repr__(self):
-        return "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}, features = {}".format(self.voxel_grid.features.shape, self.voxel_grid.raster_indices.shape, self.stamp, self.frame_id, self.device, self.voxel_grid.feature_keys)
+        return (
+            "VoxelGridTorch of size {}, {}, time = {:.2f}, frame = {}, device = {}, "
+            "features = {}"
+        ).format(
+            self.voxel_grid.features.shape,
+            self.voxel_grid.raster_indices.shape,
+            self.stamp,
+            self.frame_id,
+            self.device,
+            self.voxel_grid.feature_keys,
+        )

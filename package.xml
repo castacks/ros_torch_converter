@@ -7,8 +7,13 @@
   <maintainer email="striest@andrew.cmu.edu">Sam Triest</maintainer>
   <license>BSD-3-Clause</license>
 
+  <depend>humanflow_msgs</depend>
+
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>perception_interfaces</exec_depend>
   <exec_depend>torch</exec_depend>
   <exec_depend>ros2launch</exec_depend>
 

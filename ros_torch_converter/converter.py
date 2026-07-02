@@ -7,6 +7,7 @@ from message_filters import ApproximateTimeSynchronizer, Subscriber
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.command import CommandTorch
+from ros_torch_converter.datatypes.bool import BoolTorch
 from ros_torch_converter.datatypes.image import (
     ImageTorch,
     CompressedImageTorch,
@@ -23,6 +24,8 @@ from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransfor
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
+from ros_torch_converter.datatypes.people_detections import PeopleDetectionsTorch
+from ros_torch_converter.datatypes.track_path import TrackPathTorch
 from ros_torch_converter.datatypes.sensor_msgs import (
     ImuTorch,
     NavSatFixTorch,
@@ -38,6 +41,7 @@ str_to_cvt_class = {
     "GridMap": BEVGridTorch,  # GridMap is handled by BEVGridTorch
     "Float32": Float32Torch,
     "Command": CommandTorch,
+    "Bool": BoolTorch,
     "Image": ImageTorch,
     "CompressedImage": CompressedImageTorch,
     "FeatureImage": FeatureImageTorch,
@@ -57,6 +61,8 @@ str_to_cvt_class = {
     "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
     "TwistStamped": TwistTorch,
     "FFCStatus": FFCStatusTorch,
+    "PeopleDetections": PeopleDetectionsTorch,
+    "TrackPath": TrackPathTorch,
 }
 
 
@@ -73,6 +79,7 @@ class ROSTorchConverter(Node):
         self.config = config
         self.device = self.config["device"]
         self.subscribers = {}
+        self.sync_filters = []
         self.converters = {}
 
         self.data = {}
@@ -88,7 +95,7 @@ class ROSTorchConverter(Node):
 
     def setup_subscribers(self):
         sync_groups = self.config.get("sync_topics", [])
-        
+
         for topic_conf in self.config["topics"]:
             self.data[topic_conf["name"]] = None
             self.data_times[topic_conf["name"]] = -1.0
@@ -96,12 +103,12 @@ class ROSTorchConverter(Node):
 
         if sync_groups:
             self._setup_synchronized_subscribers(sync_groups)
-        
+
         for topic_conf in self.config["topics"]:
             if topic_conf["name"] not in self.synced_topics:
                 sub = self.create_subscription(
-                    self.converters[topic_conf["name"]].from_rosmsg_type, # Message type
-                    topic_conf["topic"], # Topic name
+                    self.converters[topic_conf["name"]].from_rosmsg_type,
+                    topic_conf["topic"],
                     lambda msg, topic_conf=topic_conf: self.handle_msg(msg, topic_conf),
                     qos_profile=qos_profile_sensor_data,
                 )
@@ -112,32 +119,43 @@ class ROSTorchConverter(Node):
             topic_names = sync_config["topics"]
             queue_size = sync_config.get("queue_size", 5)
             slop = sync_config.get("slop", 0.1)
-            
+
             subscribers = []
             topic_configs = []
-            
+
             for topic_name in topic_names:
-                topic_conf = next((t for t in self.config["topics"] if t["name"] == topic_name), None)
+                topic_conf = next(
+                    (t for t in self.config["topics"] if t["name"] == topic_name),
+                    None,
+                )
                 if topic_conf is None:
-                    self.get_logger().warn(f"Sync topic {topic_name} not found in topics list")
+                    self.get_logger().warn(
+                        f"Sync topic {topic_name} not found in topics list"
+                    )
                     continue
-                
+
                 sub = Subscriber(
                     self,
                     self.converters[topic_name].from_rosmsg_type,
-                    topic_conf["topic"]
+                    topic_conf["topic"],
                 )
                 subscribers.append(sub)
                 topic_configs.append(topic_conf)
+                self.subscribers[topic_name] = sub
                 self.synced_topics.add(topic_name)
-            
+
             if len(subscribers) > 1:
                 sync = ApproximateTimeSynchronizer(
                     subscribers,
                     queue_size=queue_size,
-                    slop=slop
+                    slop=slop,
                 )
-                sync.registerCallback(lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(msgs, configs))
+                sync.registerCallback(
+                    lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(
+                        msgs, configs
+                    )
+                )
+                self.sync_filters.append(sync)
 
     def handle_msg(self, msg, topic_conf):
         if not self.lock:
@@ -145,7 +163,9 @@ class ROSTorchConverter(Node):
             try:
                 self.data_times[topic_conf["name"]] = stamp_to_time(msg.header.stamp)
             except:
-                self.data_times[topic_conf["name"]] = stamp_to_time(self.get_clock().now().to_msg())
+                self.data_times[topic_conf["name"]] = stamp_to_time(
+                    self.get_clock().now().to_msg()
+                )
 
     def handle_synchronized_msgs(self, msgs, topic_configs):
         if not self.sync_lock:
@@ -154,7 +174,9 @@ class ROSTorchConverter(Node):
                 try:
                     self.data_times[topic_conf["name"]] = stamp_to_time(msg.header.stamp)
                 except:
-                    self.data_times[topic_conf["name"]] = stamp_to_time(self.get_clock().now().to_msg())
+                    self.data_times[topic_conf["name"]] = stamp_to_time(
+                        self.get_clock().now().to_msg()
+                    )
 
     def get_data(self, return_times=False, device="cpu"):
         self.lock = True
@@ -163,12 +185,16 @@ class ROSTorchConverter(Node):
 
         for topic_conf in self.config["topics"]:
             tname = topic_conf["name"]
-            cvt = self.converters[tname]
             msg = self.data[tname]
-            msg_torch = cvt.from_rosmsg(msg, device=self.device, **topic_conf["args"])
-            data[tname] = msg_torch
+            if msg is None:
+                continue
+            cvt = self.converters[tname]
+            data[tname] = cvt.from_rosmsg(
+                msg,
+                device=self.device,
+                **topic_conf.get("args", {}),
+            )
 
-        # data = {k: self.converters[k].from_rosmsg(msg, device=self.device, **self.config["topics"][k]["args"]) for k, msg in self.data.items()}
         times = copy.deepcopy(self.data_times)
         self.lock = False
         self.sync_lock = False
@@ -178,12 +204,20 @@ class ROSTorchConverter(Node):
     def can_get_data(self):
         curr_time = stamp_to_time(self.get_clock().now().to_msg())
 
-        for topic_config in self.config["topics"]:
-            max_age = topic_config["max_age"]
-            topic_name = topic_config["name"]
+        for topic_conf in self.config["topics"]:
+            if topic_conf.get("optional", False):
+                continue
+
+            topic_name = topic_conf["name"]
+            if self.data[topic_name] is None:
+                return False
+
+            max_age = topic_conf.get("max_age", self.config.get("max_age"))
             data_time = self.data_times[topic_name]
 
-            if curr_time - data_time > max_age or data_time < 0.0:
+            if data_time < 0.0:
+                return False
+            if max_age is not None and curr_time - data_time >= max_age:
                 return False
 
         return True
@@ -194,10 +228,13 @@ class ROSTorchConverter(Node):
         for topic_conf in self.config["topics"]:
             data_exists = self.data[topic_conf["name"]] is not None
             data_age = curr_time - self.data_times[topic_conf["name"]]
-            out += "\t{:<16} exists: {} age:{:.2f}s\n".format(
+            is_optional = topic_conf.get("optional", False)
+            optional_str = " [OPTIONAL]" if is_optional else ""
+            out += "\t{:<16} exists: {} age:{:.2f}s{}\n".format(
                 topic_conf["name"] + " " + topic_conf["topic"] + ":",
                 data_exists,
                 data_age,
+                optional_str,
             )
 
         out += "can get data: {}\n".format(self.can_get_data())
