@@ -13,6 +13,30 @@
   topics: !listcat
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/multisense_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
-    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml
+
+    - 
+      - name: steer_angle
+        group: controls
+        topic: /talon/current_position
+        type: Float32
+        args: {}
+
+      - name: command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}
+
+      - name: teleop_command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}
+
+      - name: auto_command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        args: {}

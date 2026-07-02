@@ -9,11 +9,11 @@ from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from geometry_msgs.msg import Vector3
 from perception_interfaces.msg import FeatureVoxelGrid, VoxelGridMetadata
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import (
-    update_frame_file,
+    update_info_file,
     update_timestamp_file,
-    read_frame_file,
+    read_info_file,
     read_timestamp_file,
 )
 
@@ -32,6 +32,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -260,7 +261,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         """define how to convert this dtype to a kitti file
         """
         update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, "frame_id", self.frame_id)
+        update_info_file(base_dir, "frame_id", self.frame_id)
 
         metadata = {
             "feature_keys": [
@@ -284,6 +285,9 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             "min_coords": self.voxel_grid.min_coords.cpu().numpy(),
             "max_coords": self.voxel_grid.max_coords.cpu().numpy(),
         }
+        if hasattr(self.voxel_grid, "first_update_time"):
+            data["first_update_time"] = self.voxel_grid.first_update_time.cpu().numpy()
+            data["last_update_time"] = self.voxel_grid.last_update_time.cpu().numpy()
 
         if hdf5:
             data_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
@@ -393,13 +397,39 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             dtype=torch.float,
             device=device,
         )
+
+        # Add backwards compatibility for KITTI dumps created before update-time
+        # fields existed.
+        if "first_update_time" in voxel_data.keys():
+            voxel_grid.first_update_time = torch.tensor(
+                voxel_data["first_update_time"],
+                dtype=torch.double,
+                device=device,
+            )
+            voxel_grid.last_update_time = torch.tensor(
+                voxel_data["last_update_time"],
+                dtype=torch.double,
+                device=device,
+            )
+        else:
+            voxel_grid.first_update_time = -torch.ones(
+                voxel_grid.raster_indices.shape[0],
+                dtype=torch.double,
+                device=device,
+            )
+            voxel_grid.last_update_time = -torch.ones(
+                voxel_grid.raster_indices.shape[0],
+                dtype=torch.double,
+                device=device,
+            )
+
         voxel_grid.feature_keys = feature_keys
 
         vgt = VoxelGridTorch(device=device)
         vgt.voxel_grid = voxel_grid
 
         vgt.stamp = read_timestamp_file(base_dir, idx)
-        vgt.frame_id = read_frame_file(base_dir, idx, "frame_id")
+        vgt.frame_id = read_info_file(base_dir, "frame_id")
 
         return vgt
 

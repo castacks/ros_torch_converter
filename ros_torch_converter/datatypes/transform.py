@@ -4,8 +4,8 @@ import numpy as np
 
 from scipy.spatial.transform import Rotation as R
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -19,6 +19,7 @@ class TransformTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = TransformStamped
     from_rosmsg_type = TransformStamped
+    time_spec = TimeSpec.INTERP
 
     def __init__(self, device='cpu'):
         super().__init__()
@@ -73,15 +74,21 @@ class TransformTorch(TorchCoordinatorDataType):
         return res
 
     def to_kitti(self, base_dir, idx):
-        """define how to convert this dtype to a kitti file
-        """
-        update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-        update_frame_file(base_dir, idx, 'child_frame_id', self.child_frame_id)
+        update_timestamp_file(base_dir, idx, self.stamp, file='timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'child_frame_id', self.child_frame_id)
+        self.save_to_file(base_dir, idx, file='data.txt')
 
+    def to_kitti_interp(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        update_info_file(base_dir, 'child_frame_id', self.child_frame_id)
+        self.save_to_file(base_dir, idx, file='interp_data.txt')
+
+    def save_to_file(self, base_dir, idx, file='data.txt'):
         _data = self.transform[:3].flatten().cpu().numpy()
 
-        save_fp = os.path.join(base_dir, "data.txt")
+        save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1, 12])
         else:
@@ -106,12 +113,12 @@ class TransformTorch(TorchCoordinatorDataType):
         H[:3] = _data.reshape(3, 4)
         H = torch.tensor(H, dtype=torch.float, device=device)
 
-        child_frame_id = read_frame_file(base_dir, idx, 'child_frame_id')
+        child_frame_id = read_info_file(base_dir, 'child_frame_id')
 
         tft = TransformTorch.from_torch(H, child_frame_id)
 
         tft.stamp = read_timestamp_file(base_dir, idx)
-        tft.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        tft.frame_id = read_info_file(base_dir,  'frame_id')
 
         return tft
         
@@ -160,6 +167,7 @@ class OdomTransformTorch(TransformTorch):
     """
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
+    time_spec = TimeSpec.INTERP
     
     def from_rosmsg(msg, device):
         res = TransformTorch(device=device)

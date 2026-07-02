@@ -2,8 +2,10 @@ import os
 import torch
 import numpy as np
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
-from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
+from tartandriver_utils.geometry_utils import MultiDimensionalInterpolator
+
+from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
 from geometry_msgs.msg import TwistStamped
 
@@ -14,6 +16,34 @@ class CommandTorch(TorchCoordinatorDataType):
     """
     to_rosmsg_type = TwistStamped
     from_rosmsg_type = TwistStamped
+    time_spec = TimeSpec.INTERP
+
+    ##for now all interpolables have a few extra interfaces
+    def to_interp(base_dir, cmdlist):
+        data = torch.stack([x.state for x in cmdlist], dim=0).cpu().numpy()
+        times = np.array([x.stamp for x in cmdlist])
+
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        np.savetxt(data_fp, data)
+        np.savetxt(timestamp_fp, times)
+    
+    def from_interp(base_dir, target_timestamp, device, tol=0.5):
+        data_fp = os.path.join(base_dir, 'interp_data.txt')
+        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
+
+        data = np.loadtxt(data_fp).reshape(-1, 2)
+        timestamps = np.loadtxt(timestamp_fp)
+
+        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, tol=tol)
+        data = interp(target_timestamp)
+
+        out = CommandTorch.from_numpy(data).to(device)
+        out.stamp = target_timestamp
+        out.frame_id = read_info_file(base_dir,  'frame_id')
+
+        return out
     
     def __init__(self, device='cpu'):
         super().__init__()
@@ -60,10 +90,17 @@ class CommandTorch(TorchCoordinatorDataType):
         """
         note that some dtypes  should be stored as rows of a matrix
         """
-        update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
+        update_timestamp_file(base_dir, idx, self.stamp, file='timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        self.save_to_file(base_dir, idx, file='data.txt')
 
-        save_fp = os.path.join(base_dir, "data.txt")
+    def to_kitti_interp(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        self.save_to_file(base_dir, idx, file='interp_data.txt')
+
+    def save_to_file(self, base_dir, idx, file='data.txt'):
+        save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
             data = float('inf') * np.ones([idx+1, 2])
         else:
@@ -88,7 +125,7 @@ class CommandTorch(TorchCoordinatorDataType):
         out.state = torch.tensor(data, device=device).float()
 
         out.stamp = read_timestamp_file(base_dir, idx)
-        out.frame_id = read_frame_file(base_dir, idx, 'frame_id')
+        out.frame_id = read_info_file(base_dir,  'frame_id')
 
         return out
     
@@ -98,7 +135,7 @@ class CommandTorch(TorchCoordinatorDataType):
         data = np.loadtxt(save_fp).reshape(-1, 2)[idxs]
         data = torch.tensor(data, device=device).float()
         stamps = read_timestamp_file(base_dir, idxs)
-        frame_id = read_frame_file(base_dir, idxs[0], 'frame_id')
+        frame_id = read_info_file(base_dir, 'frame_id')
 
         out = [CommandTorch.from_kitti(x) for x in data]
 
