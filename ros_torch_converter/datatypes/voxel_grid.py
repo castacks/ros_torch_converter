@@ -221,6 +221,9 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         vgt.frame_id = read_info_file(base_dir,  'frame_id')
 
         return vgt
+    
+    def visualize_o3d(self):
+        return self.voxel_grid.visualize()
 
     def rand_init(device='cpu'):
         voxel_grid = VoxelGrid.random_init()
