@@ -19,7 +19,7 @@ from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from tartandriver_utils.os_utils import save_yaml
 from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
-from tartandriver_utils.o3d_viz_utils import make_bev_mesh, apply_cmap_to_torch_tensor, normalize_dino
+from tartandriver_utils.o3d_viz_utils import normalize_dino
 
 from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 from grid_map_msgs.msg import GridMap
@@ -346,34 +346,6 @@ class BEVGridTorch(TorchCoordinatorDataType):
         bgt.stamp = read_timestamp_file(base_dir, idx)
         bgt.frame_id = read_info_file(base_dir,  'frame_id')
         return bgt
-    
-    def visualize_o3d(self, color_layer, elevation_layer, mask_layer=None, vlim=None, cmap='jet', normalize_raw=True):
-        if isinstance(color_layer, list):
-            color_idxs = [self.bev_grid.feature_keys.index(k) for k in color_layer]
-            color_raw = self.bev_grid.data[:, :, color_idxs]
-            color_data = normalize_dino(color_raw, vlim=vlim) if normalize_raw else color_raw
-        else:
-            color_idx = self.bev_grid.feature_keys.index(color_layer)
-            color_raw = self.bev_grid.data[:, :, color_idx]
-            color_data = apply_cmap_to_torch_tensor(color_raw, cmap=cmap, vlim=vlim)
-
-        elevation_idx = self.bev_grid.feature_keys.index(elevation_layer)
-        elevation_data = self.bev_grid.data[:, :, elevation_idx]
-
-        if mask_layer is not None:
-            mask_idx = self.bev_grid.feature_keys.index(mask_layer)
-            mask_data = self.bev_grid.data[:, :, mask_idx] > 0.5
-        else:
-            mask_data = torch.ones_like(elevation_data).bool()
-
-        bev_mesh = make_bev_mesh(
-            metadata = self.bev_grid.metadata,
-            height = elevation_data,
-            mask = mask_data,
-            colors = color_data
-        )
-
-        return [bev_mesh]
         
     def rand_init():
         bev_grid = BEVGrid.random_init()
