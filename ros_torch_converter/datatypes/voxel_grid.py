@@ -223,7 +223,7 @@ class VoxelGridTorch(TorchCoordinatorDataType):
         return vgt
     
     def visualize_o3d(self):
-        return self.voxel_grid.visualize()
+        return [self.voxel_grid.visualize()]
 
     def rand_init(device='cpu'):
         voxel_grid = VoxelGrid.random_init()

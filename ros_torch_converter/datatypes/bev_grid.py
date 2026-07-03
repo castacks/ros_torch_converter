@@ -373,7 +373,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
             colors = color_data
         )
 
-        return bev_mesh
+        return [bev_mesh]
         
     def rand_init():
         bev_grid = BEVGrid.random_init()

@@ -1,6 +1,7 @@
 import os
 import torch
 import numpy as np
+import open3d as o3d
 
 from scipy.spatial.transform import Rotation as R
 
@@ -12,6 +13,8 @@ from ros_torch_converter.utils import update_info_file, update_timestamp_file, r
 from nav_msgs.msg import Odometry
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+from tartandriver_utils.geometry_utils import pose_to_htm
+from tartandriver_utils.o3d_viz_utils import get_atv_mesh
 
 class OdomRBStateTorch(TorchCoordinatorDataType):
     """state as [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]
@@ -173,7 +176,17 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         rbsts = [OdomRBStateTorch.from_torch(state, child_frame_id) for state in states]
 
         return rbsts
-
+    
+    def visualize_o3d(self, draw_atv=False, atv_origin='velodyne_1'):
+        H = pose_to_htm(self.state[:7].cpu().numpy())
+        if draw_atv:
+            atv = get_atv_mesh(origin=atv_origin).transform(H)
+            ax = o3d.geometry.TriangleMesh.create_coordinate_frame().transform(H)
+            return [atv, ax]
+        else:
+            ax = o3d.geometry.TriangleMesh.create_coordinate_frame().transform(H)
+            return [ax]
+        
     def rand_init(device='cpu'):
         x = torch.rand(13)
 
