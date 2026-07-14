@@ -125,8 +125,15 @@ class VoxelGridTorch(TorchCoordinatorDataType):
 
         data = points
 
-        if self.voxel_grid.features.shape[1] >= 3:
-            feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
+        if self.voxel_grid.features.shape[1] >= 3 and self.voxel_grid.features.shape[0] > 0:
+            feature_keys = self.voxel_grid.feature_keys
+            labels = feature_keys.label if hasattr(feature_keys, "label") else feature_keys
+            is_rgb = all(key in labels for key in "rgb")
+
+            if is_rgb:
+                feature_colors = self.voxel_grid.features[:, :3]
+            else:
+                feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
             non_feature_colors = 0.8 * torch.ones(non_feature_idxs.shape[0], 3, device=self.device)
             all_colors = torch.cat([feature_colors, non_feature_colors], dim=0)
             colors = all_colors.cpu().numpy()
