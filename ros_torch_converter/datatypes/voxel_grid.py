@@ -84,7 +84,10 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             except Exception:
                 feature_keys = list(msg.feature_keys)
         else:
-            feature_keys = n_feat
+            feature_keys = FeatureKeyList(
+                label=["f{}".format(i) for i in range(n_feat)],
+                metainfo=["unknown"] * n_feat,
+            )
         vg = VoxelGrid(md, feature_keys, device)
         if len(msg.indices) == 0:
             res = VoxelGridTorch(device=device)
