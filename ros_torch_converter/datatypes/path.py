@@ -5,10 +5,12 @@ import numpy as np
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
-from geometry_msgs.msg import PoseStamped, Pose, Point, Quaternion
+from geometry_msgs.msg import PoseStamped
 from nav_msgs.msg import Path
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
+
+POSE_DIM = 7
 
 class PathTorch(TorchCoordinatorDataType):
     """
@@ -23,30 +25,37 @@ class PathTorch(TorchCoordinatorDataType):
 
     def __init__(self, device='cpu'):
         super().__init__()
-        self.poses = torch.zeros(0, 7, device=device)
+        self.poses = torch.zeros(0, POSE_DIM, device=device)
         self.device = device
 
+    @staticmethod
     def from_torch(poses):
+        if poses.ndim != 2 or poses.shape[1] != POSE_DIM:
+            raise ValueError(
+                "PathTorch.from_torch expected [P, {}], got {}".format(
+                    POSE_DIM, tuple(poses.shape)
+                )
+            )
         pat = PathTorch(device=poses.device)
         pat.poses = poses
         return pat
-    
+
+    @staticmethod
     def from_rosmsg(msg, device='cpu'):
         pat = PathTorch(device=device)
-        poses = []
-        for _pose in msg.poses:
-            poses.append(torch.tensor([
-                _pose.pose.position.x,
-                _pose.pose.position.y,
-                _pose.pose.position.z,
-                _pose.pose.orientation.x,
-                _pose.pose.orientation.y,
-                _pose.pose.orientation.z,
-                _pose.pose.orientation.w,
-            ]))
-        poses = torch.stack(poses, dim=0)
+        poses = np.empty((len(msg.poses), POSE_DIM), dtype=np.float32)
+        for i, pose in enumerate(msg.poses):
+            poses[i] = [
+                pose.pose.position.x,
+                pose.pose.position.y,
+                pose.pose.position.z,
+                pose.pose.orientation.x,
+                pose.pose.orientation.y,
+                pose.pose.orientation.z,
+                pose.pose.orientation.w,
+            ]
 
-        pat.poses = poses.to(device)
+        pat.poses = torch.from_numpy(poses).to(device)
         pat.stamp = stamp_to_time(msg.header.stamp)
         pat.frame_id = msg.header.frame_id
 
@@ -57,20 +66,20 @@ class PathTorch(TorchCoordinatorDataType):
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
 
-        for _pose in self.poses:
-            _path_pose = PoseStamped()
-            _path_pose.stamp = msg.header.stamp
-            _path_pose.frame_id = msg.header.frame_id
+        for pose in self.poses:
+            path_pose = PoseStamped()
+            path_pose.header.stamp = msg.header.stamp
+            path_pose.header.frame_id = msg.header.frame_id
 
-            _path_pose.pose.position.x = _pose[0].item()
-            _path_pose.pose.position.y = _pose[1].item()
-            _path_pose.pose.position.z = _pose[2].item()
-            _path_pose.pose.orientation.x = _pose[3].item()
-            _path_pose.pose.orientation.y = _pose[4].item()
-            _path_pose.pose.orientation.z = _pose[5].item()
-            _path_pose.pose.orientation.w = _pose[6].item()
+            path_pose.pose.position.x = pose[0].item()
+            path_pose.pose.position.y = pose[1].item()
+            path_pose.pose.position.z = pose[2].item()
+            path_pose.pose.orientation.x = pose[3].item()
+            path_pose.pose.orientation.y = pose[4].item()
+            path_pose.pose.orientation.z = pose[5].item()
+            path_pose.pose.orientation.w = pose[6].item()
 
-            msg.poses.append(_path_pose)
+            msg.poses.append(path_pose)
 
         return msg
     
@@ -81,9 +90,14 @@ class PathTorch(TorchCoordinatorDataType):
         save_fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         np.savetxt(save_fp, self.poses.cpu().numpy())
 
+    @staticmethod
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "{:08d}.txt".format(idx))
         data = np.loadtxt(fp)
+        if data.size == 0:
+            data = np.zeros((0, POSE_DIM), dtype=np.float32)
+        elif data.ndim == 1:
+            data = data.reshape(1, -1)
         data = torch.tensor(data, dtype=torch.float, device=device)
 
         gat = PathTorch.from_torch(data)
@@ -93,6 +107,7 @@ class PathTorch(TorchCoordinatorDataType):
 
         return gat
     
+    @staticmethod
     def rand_init(device='cpu'):
         goals = torch.rand(10, 7, device=device)
         gat = PathTorch.from_torch(goals)
@@ -103,10 +118,16 @@ class PathTorch(TorchCoordinatorDataType):
         return gat
 
     def __eq__(self, other):
+        if not isinstance(other, PathTorch):
+            return NotImplemented
+
         if self.frame_id != other.frame_id:
             return False
 
         if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        if self.poses.shape != other.poses.shape:
             return False
 
         if not torch.allclose(self.poses, other.poses):

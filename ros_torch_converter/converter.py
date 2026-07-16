@@ -32,7 +32,6 @@ from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 from ros_torch_converter.datatypes.path import PathTorch
 from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.people_detections import PeopleDetectionsTorch
-from ros_torch_converter.datatypes.track_path import TrackPathTorch
 from ros_torch_converter.datatypes.sensor_msgs import (
     ImuTorch,
     NavSatFixTorch,
@@ -75,7 +74,6 @@ str_to_cvt_class = {
     "TwistStamped": TwistTorch,
     "FFCStatus": FFCStatusTorch,
     "PeopleDetections": PeopleDetectionsTorch,
-    "TrackPath": TrackPathTorch,
     "FrontierScores": FrontierScoresTorch,
 }
 
