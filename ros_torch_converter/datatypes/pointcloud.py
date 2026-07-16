@@ -92,13 +92,13 @@ class PointCloudTorch(TorchCoordinatorDataType):
         msg.width = points.shape[0]
         msg.point_step = 12
 
-        msg.fields = [PointField(name=n, offset=4*i, datatype=PointField.FLOAT32, count=msg.width) for i,n in enumerate('xyz')]
+        msg.fields = [PointField(name=n, offset=4*i, datatype=PointField.FLOAT32, count=1) for i,n in enumerate('xyz')]
 
         data = points
 
         if self.colors.shape[0] > 0:
             msg.point_step += 4
-            msg.fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=msg.width))
+            msg.fields.append(PointField(name='rgb', offset=12, datatype=PointField.FLOAT32, count=1))
 
             r = (colors[:, 0] * 255).astype(np.uint32)
             g = (colors[:, 1] * 255).astype(np.uint32)
@@ -108,6 +108,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
 
             data = np.concatenate([data, rgb.reshape(-1, 1)], axis=-1)
 
+        msg.row_step = msg.point_step * msg.width
         data = data.flatten()
 
         # borrowing from https://github.com/Box-Robotics/ros2_numpy/blob/humble/ros2_numpy/point_cloud2.py
