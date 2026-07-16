@@ -11,12 +11,12 @@ import array
 import numpy as np
 import torch
 
-from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
+from ros_torch_converter.datatypes.base import TimeSpec, TorchCoordinatorDataType
 
 from geometry_msgs.msg import Vector3
 from perception_interfaces.msg import VoxelCostGrid, VoxelGridMetadata
 
-from tartandriver_utils.ros_utils import time_to_stamp
+from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 
 # Flag bits must match perception_interfaces/msg/VoxelCostGrid.msg
@@ -31,6 +31,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
 
     to_rosmsg_type = VoxelCostGrid
     from_rosmsg_type = VoxelCostGrid
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, device):
         super().__init__()
@@ -217,6 +218,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
                     np.frombuffer(bytes(rough_src), dtype=np.float32).astype(np.float32)
                 ).to(device)
         res.frame_id = msg.header.frame_id
+        res.stamp = stamp_to_time(msg.header.stamp)
         return res
 
     # ---------------- utilities ----------------
@@ -242,6 +244,51 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
 
     def from_kitti(self, base_dir, idx, device):
         pass
+
+    @staticmethod
+    def rand_init(device="cpu"):
+        res = VoxelCostFieldTorch(device=device)
+        res.origin = torch.tensor([-5.0, -5.0, -2.0], device=device)
+        res.length = torch.tensor([10.0, 10.0, 4.0], device=device)
+        res.resolution = torch.tensor([0.2, 0.2, 0.2], device=device)
+        res.N = torch.round(res.length / res.resolution).long()
+        res.grid_indices = torch.randint(
+            low=0, high=20, size=(100, 3), device=device
+        )
+        res.cost = torch.rand(100, dtype=torch.float32, device=device) * 100.0
+        res.flags = torch.randint(
+            low=0, high=16, size=(100,), dtype=torch.uint8, device=device
+        )
+        res.surface_type = torch.randint(
+            low=0, high=4, size=(100,), dtype=torch.int32, device=device
+        )
+        res.inclination_deg = torch.rand(100, device=device) * 90.0
+        res.roughness = torch.rand(100, device=device)
+        res.frame_id = "random"
+        res.stamp = float(np.random.rand())
+        return res
+
+    def __eq__(self, other):
+        if not isinstance(other, VoxelCostFieldTorch):
+            return NotImplemented
+        if self.frame_id != other.frame_id or abs(self.stamp - other.stamp) > 1e-8:
+            return False
+        float_fields = (
+            "origin",
+            "length",
+            "resolution",
+            "cost",
+            "inclination_deg",
+            "roughness",
+        )
+        integer_fields = ("N", "grid_indices", "flags", "surface_type")
+        return all(
+            torch.allclose(getattr(self, name), getattr(other, name))
+            for name in float_fields
+        ) and all(
+            torch.equal(getattr(self, name), getattr(other, name))
+            for name in integer_fields
+        )
 
     def to(self, device):
         self.device = device
