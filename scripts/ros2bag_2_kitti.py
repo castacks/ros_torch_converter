@@ -18,13 +18,13 @@ from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
 from ros_torch_converter.datatypes.base import TimeSpec
 from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
-
 """
 Script to create kitti-formatted datasets from ros2 bags
 General algo is something like this:
     1. First do a pass through to figure out all the target times
     2. Then do another pass through to actually convert messages, etc
 """
+
 
 def setup_queue(reader, config):
     """
@@ -116,12 +116,7 @@ if __name__ == '__main__':
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--no_render_video', action='store_true', help='skip video rendering after conversion')
-    parser.add_argument('--render_video_hud', action='store_true', help='render timestamp/speed/minimap HUD on output videos')
-    parser.add_argument('--video_hud_odom_topic', type=str, default='/odometry/filtered_odom', help='odometry topic for video HUD speed and minimap')
-    parser.add_argument('--video_hud_map_tif', type=str, default=None, help='optional GeoTIFF map background for video HUD minimap')
-    parser.add_argument('--video_hud_map_source', type=str, default='auto', choices=['auto', 'tif', 'track', 'osm'], help='video HUD minimap source')
-    parser.add_argument('--video_hud_allow_network_tiles', action='store_true', help='allow network map tiles for video HUD when map source is osm')
-    parser.add_argument('--video_hud_workers', type=int, default=None, help='worker count for video HUD overlay rendering')
+    parser.add_argument('--video_config', type=str, default=None, help='path to a video render config yaml (HUD + picture-in-picture insets); see config/video/*.yaml')
     args = parser.parse_args()
 
     if os.path.exists(args.dst_dir) and not args.force:
@@ -436,23 +431,47 @@ if __name__ == '__main__':
         print('{} has all frames: {}'.format(topic, valid), flush=True)
 
     if not args.no_render_video:
-        from tartandriver_utils.video_utils import render_kitti_video, render_kitti_video_with_hud
+        from tartandriver_utils.video_utils import (
+            render_kitti_video, render_kitti_video_with_hud, load_video_config)
         print('\nRendering videos...')
         viz_dir = os.path.join(args.dst_dir, 'viz')
         os.makedirs(viz_dir, exist_ok=True)
+
+        vcfg = load_video_config(args.video_config)
+        hud = vcfg["hud"]
+
         hud_data = None
-        if args.render_video_hud:
-            print(f"  [hud] collecting odometry from {args.video_hud_odom_topic}")
+        if hud is not None:
+            print(f"  [hud] collecting odometry from {hud['odom_topic']}")
             hud_data = collect_video_hud_odom(
                 bagpath,
                 typestore,
-                args.video_hud_odom_topic,
+                hud['odom_topic'],
                 use_bag_time=args.use_bag_time,
             )
+
+        # Group PiP insets by their main modality. Insets whose frame dir is
+        # absent/empty are skipped downstream by the renderer (existence gate).
+        pip_by_main = {}
+        for spec in vcfg["pip"]:
+            inset_key = spec['inset']
+            if inset_key not in cvt_info:
+                print(f"  [pip] inset modality '{inset_key}' not in config; skipping")
+                continue
+            pip_by_main.setdefault(spec['main'], []).append({
+                'dir': cvt_info[inset_key]['dir'],
+                'scale': spec.get('scale', 0.25),
+                'pos': spec.get('pos', 'bottom-right'),
+                'margin': spec.get('margin', 16),
+                'border': spec.get('border', 3),
+                'border_color': spec.get('border_color', 'white'),
+            })
+
         for cinfo in cvt_info.values():
             video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
             output_path = os.path.join(viz_dir, video_name)
-            if args.render_video_hud:
+            pip = pip_by_main.get(f"{cinfo['group']}/{cinfo['name']}")
+            if hud is not None:
                 v = render_kitti_video_with_hud(
                     cinfo['dir'],
                     output_path=output_path,
@@ -462,12 +481,13 @@ if __name__ == '__main__':
                     speed_times=hud_data["speed_times"],
                     bag_start_time=hud_data["bag_start_time"],
                     overlay_root=os.path.join(viz_dir, 'overlays'),
-                    map_tif=args.video_hud_map_tif,
-                    map_source=args.video_hud_map_source,
-                    allow_network_tiles=args.video_hud_allow_network_tiles,
-                    n_workers=args.video_hud_workers,
+                    map_tif=hud['map_tif'],
+                    map_source=hud['map_source'],
+                    allow_network_tiles=hud['allow_network_tiles'],
+                    n_workers=hud['workers'],
+                    pip=pip,
                 )
             else:
-                v = render_kitti_video(cinfo['dir'], output_path=output_path)
+                v = render_kitti_video(cinfo['dir'], output_path=output_path, pip=pip)
             if v:
                 print(f'  {v}')

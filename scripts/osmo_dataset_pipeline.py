@@ -72,7 +72,8 @@ def filter_unconverted(run_dirs, kitti_input_mount):
     ]
 
 
-def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, converter_extra_args):
+def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
+                converter_extra_args, render_video=True, video_config=""):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_output_mount, relpath)
     os.makedirs(out_dir, exist_ok=True)
@@ -88,6 +89,10 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config, co
             "--dst_dir", out_dir,
             "--force",
         ]
+        if not render_video:
+            cmd.append("--no_render_video")
+        elif video_config:
+            cmd.extend(["--video_config", resolve_kitti_config(video_config)])
         if converter_extra_args:
             cmd.extend(converter_extra_args.split())
 
@@ -115,7 +120,13 @@ def parse_args():
     parser.add_argument("--num_conversion_workers", type=int, default=4)
     parser.add_argument("--converter_extra_args", default="", help="passthrough args for ros2bag_2_kitti_multiproc.py")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
+    parser.add_argument("--render_video", default="true", help="render output videos ('true'/'false')")
+    parser.add_argument("--video_config", default="", help="path to a video render config yaml (HUD + PiP); relative to the converter package")
     return parser.parse_args()
+
+
+def str2bool(s):
+    return str(s).strip().lower() not in ("false", "0", "no", "off", "")
 
 
 def main():
@@ -140,6 +151,7 @@ def main():
                 pool.submit(
                     convert_one, relpath, args.root_dir, args.dst_dir,
                     args.kitti_output_mount, args.kitti_config, args.converter_extra_args,
+                    str2bool(args.render_video), args.video_config,
                 ): relpath
                 for relpath in pending
             }
