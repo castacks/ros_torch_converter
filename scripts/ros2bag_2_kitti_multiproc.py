@@ -557,13 +557,27 @@ if __name__ == '__main__':
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
 
+    topic_valid_masks = {}
     for topic, err in queue['topic_error'].items():
-        all_valid_mask = all_valid_mask & (err < config['interp_tol'])
+        topic_mask = err < config['interp_tol']
+        topic_valid_masks[topic] = topic_mask
+        all_valid_mask = all_valid_mask & topic_mask
 
+    tf_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
     for topic, times in queue['topic_times'].items():
-        all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
+        tf_valid_mask = tf_valid_mask & (times > tf_tmin) & (times < tf_tmax)
+    all_valid_mask = all_valid_mask & tf_valid_mask
 
-    assert all_valid_mask.any(), "topics not sync'ed!"
+    if not all_valid_mask.any():
+        print(f"{RED}topics not sync'ed! cause:{RESET}")
+        if not tf_valid_mask.any():
+            print(f"  tf window empty: [{tf_tmin:.3f}, {tf_tmax:.3f}]")
+        for topic, mask in topic_valid_masks.items():
+            if not mask.any():
+                min_err = np.min(queue['topic_error'][topic])
+                print(f"  {topic}: never within interp_tol={config['interp_tol']} (min error={min_err:.4f}s)")
+
+        assert False, "topics not sync'ed! see cause(s) above"
 
     queue['target_times'] = queue['target_times'][all_valid_mask]
 

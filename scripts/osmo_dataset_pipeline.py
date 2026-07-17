@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import multiprocessing
 import os
 import shutil
 import subprocess
@@ -9,7 +10,11 @@ import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+import yaml
+
 from tartandriver_utils.os_utils import is_kitti_dir
+
+from osmo_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
 
 
 RCLONE_REMOTE = "airlab_storage"
@@ -73,8 +78,12 @@ def filter_unconverted(run_dirs, kitti_input_mount):
 
 
 def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
-                converter_extra_args, render_video=True, video_config=""):
+                converter_extra_args, render_video=True, video_config="",
+                reannotate=False, reannotate_config="", reannotated_dir="",
+                reannotate_timeout=None, domain_queue=None):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
+    reann_dir = None
+    domain_id = None
     out_dir = os.path.join(kitti_output_mount, relpath)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -82,10 +91,29 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
         print(f"[convert] {relpath}: copying raw bag from {RCLONE_REMOTE} ...")
         rclone_copy(f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir)
 
+        # Reannotate with super_odometry first if the raw bag is missing it.
+        src_dir = scratch_dir
+        if reannotate and not bag_has_superodometry(scratch_dir):
+            # Checked out for this bag's playback only, then released below.
+            if domain_queue is not None:
+                domain_id = domain_queue.get()
+            print(f"[reannotate] {relpath}: missing super_odometry -- reannotating "
+                  f"(ROS_DOMAIN_ID={domain_id}) ...")
+            reann_dir = tempfile.mkdtemp(prefix="osmo_pipeline_reann_")
+            reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
+            src_dir = reannotate_bag(
+                scratch_dir, reann_dir, domain_id=domain_id,
+                timeout=reannotate_timeout, **reann_kwargs,
+            )
+            if reannotated_dir:
+                print(f"[reannotate] {relpath}: copying reannotated bag to "
+                      f"{RCLONE_REMOTE}:{reannotated_dir} ...")
+                rclone_copy(src_dir, f"{RCLONE_REMOTE}:{os.path.join(reannotated_dir, relpath)}")
+
         cmd = [
             sys.executable, CONVERTER_SCRIPT,
             "--config", resolve_kitti_config(kitti_config),
-            "--src_dir", scratch_dir,
+            "--src_dir", src_dir,
             "--dst_dir", out_dir,
             "--force",
         ]
@@ -106,7 +134,11 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e)
     finally:
+        if domain_id is not None and domain_queue is not None:
+            domain_queue.put(domain_id)  # release the domain for the next bag
         shutil.rmtree(scratch_dir, ignore_errors=True)
+        if reann_dir is not None:
+            shutil.rmtree(reann_dir, ignore_errors=True)
 
 
 def parse_args():
@@ -122,6 +154,8 @@ def parse_args():
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
     parser.add_argument("--render_video", default="true", help="render output videos ('true'/'false')")
     parser.add_argument("--video_config", default="", help="path to a video render config yaml (HUD + PiP); relative to the converter package")
+    parser.add_argument("--reannotate", default="false", help="reannotate bags missing super_odometry before converting ('true'/'false')")
+    parser.add_argument("--reannotate_config", default="", help="tartandriver_deploy playback config defining the reannotation stack + knobs; required if --reannotate is true")
     return parser.parse_args()
 
 
@@ -144,6 +178,30 @@ def main():
     pending = filter_unconverted(run_dirs, args.kitti_input_mount)
     print(f"[discovery] {len(pending)} pending (not yet converted)")
 
+    reannotate = str2bool(args.reannotate)
+
+    # Stack + reannotated_dir/timeout all come from reannotate_config's `reannotation:` block.
+    reannotate_config = ""
+    reannotated_dir, reannotate_timeout = "", None
+    domain_queue = None
+    manager = None
+    if reannotate:
+        assert args.reannotate_config, "--reannotate_config is required when --reannotate is true"
+        reannotate_config = resolve_deploy_path(args.reannotate_config)
+        with open(reannotate_config) as f:
+            rsec = (yaml.safe_load(f) or {}).get("reannotation", {}) or {}
+        reannotated_dir = rsec.get("reannotated_dir", "") or ""
+        t = str(rsec.get("timeout", "") or "").strip().lower()
+        reannotate_timeout = float(t) if t not in ("", "none") else None
+        print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing "
+              f"super_odometry will be reannotated first")
+
+        # One distinct ROS_DOMAIN_ID per worker guarantees no two concurrent bags collide.
+        manager = multiprocessing.Manager()
+        domain_queue = manager.Queue()
+        for k in range(args.num_conversion_workers):
+            domain_queue.put(1 + (k % 100))  # ROS_DOMAIN_ID kept within 1..100
+
     succeeded, failed = [], []
     if pending:
         with ProcessPoolExecutor(max_workers=args.num_conversion_workers) as pool:
@@ -152,6 +210,8 @@ def main():
                     convert_one, relpath, args.root_dir, args.dst_dir,
                     args.kitti_output_mount, args.kitti_config, args.converter_extra_args,
                     str2bool(args.render_video), args.video_config,
+                    reannotate, reannotate_config, reannotated_dir,
+                    reannotate_timeout, domain_queue,
                 ): relpath
                 for relpath in pending
             }
@@ -163,6 +223,9 @@ def main():
                 else:
                     print(f"[convert] FAIL {relpath}: {err}")
                     failed.append(relpath)
+
+    if manager is not None:
+        manager.shutdown()
 
     print(
         f"[summary] found={len(run_dirs)} pending={len(pending)} "
