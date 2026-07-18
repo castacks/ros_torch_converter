@@ -12,7 +12,7 @@ pip:
   - main: sensors/multisense_left_rect_color
     inset: sensors/thermal_left_processed
     scale: 0.25            # inset width as a fraction of the main width
-    pos: bottom-right      # bottom-right | bottom-left | bottom-center | top-right | top-left
+    pos: top-right         # bottom-right | bottom-left | bottom-center | top-right | top-left
     margin: 16             # pixels from the edges
     border: 3              # border thickness in px (0 = none)
     border_color: white    # ffmpeg color name
