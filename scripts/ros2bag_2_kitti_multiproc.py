@@ -472,7 +472,6 @@ if __name__ == '__main__':
     print(f"\ndst_dir: {args.dst_dir}")
     print(tabulate(tabdata, headers='firstrow', tablefmt='github'))
 
-    frame_list = set()
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         all_connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in all_topics]
         filt_cvt_info = get_filtered_config(all_connections, cvt_info)
@@ -491,6 +490,7 @@ if __name__ == '__main__':
         connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
 
         queue = setup_queue(reader, list(target_topics), config['dt'])
+        topic_frame = {}
 
         for connection, timestamp, rawdata in reader.messages(connections=connections):
             msg = reader.deserialize(rawdata, connection.msgtype)
@@ -500,12 +500,15 @@ if __name__ == '__main__':
                 stamp_time = stamp_to_time(msg.header.stamp)
                 if stamp_time != 0:
                     msg_time = stamp_time
-                frame_list.add(msg.header.frame_id)
             else:
                 msg_time = timestamp * 1e-9
 
-            if hasattr(msg, "child_frame_id"):
-                frame_list.add(msg.child_frame_id)
+            # first-seen frame wins per topic
+            if topic not in topic_frame:
+                if hasattr(msg, "child_frame_id"):
+                    topic_frame[topic] = msg.child_frame_id
+                elif hasattr(msg, "header"):
+                    topic_frame[topic] = msg.header.frame_id
 
             tdiffs = queue['target_times'] - msg_time
 
@@ -516,15 +519,6 @@ if __name__ == '__main__':
 
             queue['topic_error'][topic][better_mask] = np.abs(tdiffs)[better_mask]
             queue['topic_times'][topic][better_mask] = msg_time
-
-    #update the tf tree
-    frame_list = list(frame_list)
-
-    # TODO FIX THIS TF HACK
-    temp_ignore = ['gq7_imu_link', 'earth', 'gps_frame', 'map', 'multisense/left_camera_optical_frame']
-    for fr in temp_ignore:
-        if fr in frame_list:
-            frame_list.remove(fr)
 
     has_calib_file = False
     if 'calibration' in config.keys():
@@ -540,19 +534,19 @@ if __name__ == '__main__':
     if not has_calib_file:
         print('no calib file provided. Note that for Yamaha data this is probably wrong!')
 
+    tf_aliases = config.get('tf_aliases', [])
+
     if args.skip_tf:
         print('Skipping TF processing as requested...')
         tf_manager = None
-        tf_tmin = -np.inf
-        tf_tmax = np.inf
     else:
         print('\n3. Handle TF')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+        tf_manager = TfManager.from_rosbag(bagpath, device='cuda', tf_aliases=tf_aliases)
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
 
-        tf_tmin, tf_tmax = tf_manager.get_valid_times_from_list(frame_list)
+        tf_manager.apply_tf_aliases(tf_aliases)
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
@@ -563,19 +557,31 @@ if __name__ == '__main__':
         topic_valid_masks[topic] = topic_mask
         all_valid_mask = all_valid_mask & topic_mask
 
+    # Each topic's tf validity is gated against its own frame's ancestor chain,
+    topic_tf_ranges = {}
     tf_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
     for topic, times in queue['topic_times'].items():
-        tf_valid_mask = tf_valid_mask & (times > tf_tmin) & (times < tf_tmax)
+        if tf_manager is None:
+            tmin, tmax = -np.inf, np.inf
+        else:
+            tmin, tmax = tf_manager.tf_tree.get_valid_time_range(topic_frame.get(topic))
+        topic_tf_ranges[topic] = (tmin, tmax)
+        tf_valid_mask = tf_valid_mask & (times > tmin) & (times < tmax)
     all_valid_mask = all_valid_mask & tf_valid_mask
+
+    tf_tmin = min((r[0] for r in topic_tf_ranges.values()), default=-np.inf)
+    tf_tmax = max((r[1] for r in topic_tf_ranges.values()), default=np.inf)
 
     if not all_valid_mask.any():
         print(f"{RED}topics not sync'ed! cause:{RESET}")
-        if not tf_valid_mask.any():
-            print(f"  tf window empty: [{tf_tmin:.3f}, {tf_tmax:.3f}]")
         for topic, mask in topic_valid_masks.items():
             if not mask.any():
                 min_err = np.min(queue['topic_error'][topic])
                 print(f"  {topic}: never within interp_tol={config['interp_tol']} (min error={min_err:.4f}s)")
+        for topic, (tmin, tmax) in topic_tf_ranges.items():
+            times = queue['topic_times'][topic]
+            if not ((times > tmin) & (times < tmax)).any():
+                print(f"  {topic}: frame '{topic_frame.get(topic)}' tf valid range [{tmin:.3f}, {tmax:.3f}] never overlaps its matched message times")
 
         assert False, "topics not sync'ed! see cause(s) above"
 

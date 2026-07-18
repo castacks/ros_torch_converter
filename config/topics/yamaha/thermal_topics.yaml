@@ -1,0 +1,31 @@
+- name: thermal_left
+  group: sensors
+  topic: /thermal_left/image
+  type: Thermal16bitImage
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right
+  group: sensors
+  topic: /thermal_right/image
+  type: Thermal16bitImage
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_left_processed
+  group: sensors
+  topic: /thermal_left/image_processed
+  type: ThermalImage
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right_processed
+  group: sensors
+  topic: /thermal_right/image_processed
+  type: ThermalImage
+  max_age: 1.
+  optional: true
+  args: {}

@@ -1,0 +1,33 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  # RTK (gq7_imu_link->vehicle) and super_odometry (sensor_init->vehicle) are two
+  # independent, physically-unconnected odometry sources that both publish tf with
+  # child frame "vehicle". Alias super_odometry's claim + a clone of the sensor
+  # subtree onto vehicle_superodom/<sensor>_superodom so both chains stay queryable
+  # instead of one silently dropping the other.
+  tf_aliases:
+    - alias_root: vehicle_superodom
+      source_root: vehicle
+      alias_parent: sensor_init
+      suffix: _superodom
+
+  topics: !listcat
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/autonomy_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/multisense_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/lidar_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/gq7_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/racepak_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/thermal_topics.yaml
