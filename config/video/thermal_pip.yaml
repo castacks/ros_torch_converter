@@ -2,7 +2,8 @@
 hud:
   enabled: true
   odom_topic: /odometry/filtered_odom     # meter-frame odom for speed + minimap
-  pedal_topic: /racepak/pedal_pos         # throttle/brake bars (needs .throttle/.brake)
+  imu_topic: /novatel/imu/data            # linear_acceleration.x/y for the g-meter
+  gmeter_max_g: 2.0                       # g-meter dial full-scale radius
   map_tif: src/core/mission_manager/gps_maps/gascola.tif  # GeoTIFF minimap background (or null)
   map_source: auto                        # auto | tif | track | osm
   allow_network_tiles: false              # allow network map tiles when map_source: osm

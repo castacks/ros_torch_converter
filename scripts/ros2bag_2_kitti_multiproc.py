@@ -169,22 +169,20 @@ def collect_video_hud_odom(bagpath, typestore, odom_topic, use_bag_time=False):
     }
 
 
-def collect_video_hud_pedal(bagpath, typestore, pedal_topic, use_bag_time=False):
+def collect_video_hud_imu(bagpath, typestore, imu_topic, use_bag_time=False):
     """
-    Collect throttle/brake pedal positions for rendered video HUD overlays.
-    Expects a message with .throttle and .brake float fields (e.g. racepak RpControls).
+    Collect body-frame linear acceleration (x, y) for the rendered video HUD's
+    g-meter. Expects a sensor_msgs/Imu message.
     """
-    throttle_vals = []
-    brake_vals = []
+    accel_xy = []
     times = []
 
     with AnyReader([bagpath], default_typestore=typestore) as reader:
-        connections = [x for x in reader.connections if x.topic == pedal_topic]
+        connections = [x for x in reader.connections if x.topic == imu_topic]
         if not connections:
-            print(f"  [hud] pedal topic not found: {pedal_topic}; throttle/brake HUD disabled")
+            print(f"  [hud] imu topic not found: {imu_topic}; g-meter HUD disabled")
             return {
-                "throttle": np.zeros(0, dtype=np.float64),
-                "brake": np.zeros(0, dtype=np.float64),
+                "accel_xy": np.zeros((0, 2), dtype=np.float64),
                 "times": np.zeros(0, dtype=np.float64),
             }
 
@@ -194,13 +192,12 @@ def collect_video_hud_pedal(bagpath, typestore, pedal_topic, use_bag_time=False)
                 msg_time = stamp_to_time(msg.header.stamp)
             else:
                 msg_time = timestamp * 1e-9
-            throttle_vals.append(float(msg.throttle))
-            brake_vals.append(float(msg.brake))
+            accel = msg.linear_acceleration
+            accel_xy.append([float(accel.x), float(accel.y)])
             times.append(msg_time)
 
     return {
-        "throttle": np.asarray(throttle_vals, dtype=np.float64),
-        "brake": np.asarray(brake_vals, dtype=np.float64),
+        "accel_xy": np.asarray(accel_xy, dtype=np.float64).reshape(-1, 2),
         "times": np.asarray(times, dtype=np.float64),
     }
 
@@ -794,7 +791,7 @@ if __name__ == '__main__':
         hud = vcfg["hud"]
 
         hud_data = None
-        pedal_data = None
+        imu_data = None
         if hud is not None:
             print(f"  [hud] collecting odometry from {hud['odom_topic']}")
             hud_data = collect_video_hud_odom(
@@ -803,11 +800,11 @@ if __name__ == '__main__':
                 hud['odom_topic'],
                 use_bag_time=args.use_bag_time,
             )
-            print(f"  [hud] collecting pedal data from {hud['pedal_topic']}")
-            pedal_data = collect_video_hud_pedal(
+            print(f"  [hud] collecting imu data from {hud['imu_topic']}")
+            imu_data = collect_video_hud_imu(
                 bagpath,
                 typestore,
-                hud['pedal_topic'],
+                hud['imu_topic'],
                 use_bag_time=args.use_bag_time,
             )
 
@@ -846,10 +843,9 @@ if __name__ == '__main__':
                     map_source=hud['map_source'],
                     allow_network_tiles=hud['allow_network_tiles'],
                     n_workers=hud['workers'],
-                    throttle_vals=pedal_data["throttle"] if pedal_data is not None else None,
-                    throttle_times=pedal_data["times"] if pedal_data is not None else None,
-                    brake_vals=pedal_data["brake"] if pedal_data is not None else None,
-                    brake_times=pedal_data["times"] if pedal_data is not None else None,
+                    accel_xy=imu_data["accel_xy"] if imu_data is not None else None,
+                    accel_times=imu_data["times"] if imu_data is not None else None,
+                    gmeter_max_g=hud['gmeter_max_g'],
                     pip=pip,
                 )
             else:
