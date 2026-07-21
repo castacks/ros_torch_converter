@@ -1,6 +1,6 @@
 image_dir: image_left_rect
 pointcloud_dir: pointcloud_in_odom
-depth_output_dir: slam_depth_rgb_stack20
+depth_output_dir: slam_depth_rgb #_stack20
 pose_output_dir: camera_poses_rgb
 mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_mapping/data/masks/yamaha/image_left_color_mask.png
 
@@ -15,6 +15,6 @@ vehicle_2_cam:
   q: [0.55940, -0.54718, 0.44603, 0.43442]
 
 use_chain: False
-stack: 10 #stack +-N frames #comment out to disable
+# stack: 10 #stack +-N frames #comment out to disable
 max_depth: 200 #meters
 device: cuda

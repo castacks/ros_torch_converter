@@ -15,9 +15,12 @@ from ros_torch_converter.converter import str_to_cvt_class
 
 # This file obtain the depth and camera poses for training/eval visual SLAM methods
 
+SENSORS_GROUP = 'sensors'
+ODOM_GROUP = 'super_odometry'
+
 def load_image_for_frame(dataset_path, idx, config, device='cpu'):
     image_dir = config['image_dir']
-    image_base_dir = os.path.join(dataset_path, image_dir)
+    image_base_dir = os.path.join(dataset_path, SENSORS_GROUP, image_dir)
 
     if 'thermal' in image_dir:
         if 'processed' in image_dir:
@@ -28,9 +31,9 @@ def load_image_for_frame(dataset_path, idx, config, device='cpu'):
         return str_to_cvt_class['Image'].from_kitti(image_base_dir, idx, device=device)
 
 
-def load_pointcloud_for_frame(dataset_path, idx, config, debug=False, device='cpu'):
+def load_pointcloud_for_frame(dataset_path, idx, config, verbose=False, viz=False, device='cpu'):
     pc_dir = config['pointcloud_dir']
-    pc_base_dir = os.path.join(dataset_path, pc_dir)
+    pc_base_dir = os.path.join(dataset_path, ODOM_GROUP, pc_dir)
     if 'stack' in config:
         points = []
         start_idx = max(0, idx-config['stack'])
@@ -40,7 +43,7 @@ def load_pointcloud_for_frame(dataset_path, idx, config, debug=False, device='cp
             if os.path.exists(pc_file):
                 pc = str_to_cvt_class['PointCloud'].from_kitti(pc_base_dir, i, device=device)
                 points.append(pc.pts)
-            elif debug:
+            elif verbose:
                 print(f"Skipping missing pointcloud file: {pc_file}")
         if len(points) > 0:
             stacked_points = torch.cat(points, dim=0)
@@ -48,28 +51,29 @@ def load_pointcloud_for_frame(dataset_path, idx, config, debug=False, device='cp
             pointcloud.pts = stacked_points
         else:
             pointcloud = str_to_cvt_class['PointCloud'].from_kitti(pc_base_dir, idx, device=device)
-        if debug:
+        if verbose:
             print(f"Stacking {start_idx} to {end_idx-1}")
             if len(points) > 0:
                 print(f"Total {stacked_points.shape} points")
-                visualize_points(
-                    stacked_points,
-                    window_name=f"Pointcloud idx {idx} (stack {start_idx}-{end_idx-1}, {stacked_points.shape[0]} pts)",
-                )
             else:
                 print(f"No stacked points available, using current frame only")
+        if viz and len(points) > 0:
+            visualize_points(
+                stacked_points,
+                window_name=f"Pointcloud idx {idx} (stack {start_idx}-{end_idx-1}, {stacked_points.shape[0]} pts)",
+            )
     else:
         pointcloud = str_to_cvt_class['PointCloud'].from_kitti(pc_base_dir, idx, device=device)
 
     return pointcloud
 
 
-def process_depth(idx, dataset_path, config, tf_manager, projector, image_data, debug=False):
-    pointcloud = load_pointcloud_for_frame(dataset_path, idx, config, debug)
+def process_depth(idx, dataset_path, config, tf_manager, projector, image_data, verbose=False, viz=False):
+    pointcloud = load_pointcloud_for_frame(dataset_path, idx, config, verbose=verbose, viz=viz)
 
     timestamp = image_data.stamp
     slam_points = pointcloud.pts.cpu().numpy()
-    if debug:
+    if verbose:
         print(f"Slam points: {slam_points.shape}")
 
     point_frame = config['pointcloud_frame']
@@ -97,7 +101,7 @@ def process_depth(idx, dataset_path, config, tf_manager, projector, image_data, 
     else:
         depth_map = projector.project_lidar_to_image(slam_points, intrinsics, T_sensor2cam)
 
-    if debug:
+    if verbose:
         print(f"Depth max: {depth_map.max()}, min: {depth_map.min()}, mean: {depth_map.mean()}")
 
     if (depth_map == 0).all():
@@ -165,7 +169,7 @@ def process_single_config(config, args, tf_manager):
     config_name = config.get('pose_output_dir', config['image_dir'])
 
     sample_idx = args.idx[0] if args.idx is not None else 0
-    sample_img = cv2.imread(os.path.join(args.dataset, config['image_dir'], f"{sample_idx:08d}.png"))
+    sample_img = cv2.imread(os.path.join(args.dataset, SENSORS_GROUP, config['image_dir'], f"{sample_idx:08d}.png"))
     if sample_img is None:
         print(f"[{config_name}] Sample image not found for index {sample_idx}")
         return
@@ -178,11 +182,11 @@ def process_single_config(config, args, tf_manager):
     else:
         vehicle_mask = None
 
-    img_files = sorted(glob.glob(os.path.join(args.dataset, config['image_dir'], "*.png")))
+    img_files = sorted(glob.glob(os.path.join(args.dataset, SENSORS_GROUP, config['image_dir'], "*.png")))
 
     projector = None
     if extract_depth:
-        pc_dir = os.path.join(args.dataset, config['pointcloud_dir'])
+        pc_dir = os.path.join(args.dataset, ODOM_GROUP, config['pointcloud_dir'])
         if not os.path.exists(pc_dir):
             print(f"[{config_name}] Pointcloud directory not found: {pc_dir}. Skipping depth.")
             extract_depth = False
@@ -219,7 +223,7 @@ def process_single_config(config, args, tf_manager):
 
             depth_map = None
             if extract_depth:
-                depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, args.verbose)
+                depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, verbose=args.verbose, viz=args.viz)
                 if vehicle_mask is not None and depth_map is not None:
                     depth_map[vehicle_mask == 1] = 0
                 if depth_map is not None:
@@ -233,7 +237,7 @@ def process_single_config(config, args, tf_manager):
                 if cam_7d is not None:
                     camera_poses.append(cam_7d)
 
-            if args.verbose and depth_map is not None:
+            if args.viz and depth_map is not None:
                 img = image_to_viz(image_data)
                 depth_viz = projector.visualize_depth(depth_map)
                 plt.figure(figsize=(15, 5))
@@ -255,7 +259,7 @@ def process_single_config(config, args, tf_manager):
         if extract_odom and len(camera_poses) > 0:
             save_poses_to_file(camera_poses, debug_dir)
             saved_outputs.append(os.path.join(debug_dir, "data.txt"))
-            if is_range and args.verbose:
+            if is_range and args.viz:
                 print(f"[{config_name}] Visualizing {len(camera_poses)} camera poses "
                       f"over idx {debug_indices[0]}..{debug_indices[-1]}")
                 visualize_trajectories([], camera_poses, config)
@@ -283,12 +287,12 @@ def process_single_config(config, args, tf_manager):
         odom_poses = []
         camera_poses = []
 
-        if args.verbose and extract_odom:
-            odom_data_file = os.path.join(args.dataset, "odometry", "data.txt")
+        if args.viz and extract_odom:
+            odom_data_file = os.path.join(args.dataset, ODOM_GROUP, "odometry", "data.txt")
             if os.path.exists(odom_data_file):
                 odom_all = np.loadtxt(odom_data_file).reshape(-1, 13)[:, :7]
                 odom_poses = list(odom_all)
-                print(f"[{config_name}] Loaded {len(odom_poses)} odometry poses for debug viz")
+                print(f"[{config_name}] Loaded {len(odom_poses)} odometry poses for viz")
 
         proc_frames = len(img_files) if args.seq_to is None else min(args.seq_to, len(img_files))
 
@@ -300,7 +304,7 @@ def process_single_config(config, args, tf_manager):
                 if args.resume and os.path.exists(depth_path):
                     successful_depth += 1
                 else:
-                    depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, args.verbose)
+                    depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, verbose=args.verbose)
                     if vehicle_mask is not None and depth_map is not None:
                         depth_map[vehicle_mask == 1] = 0
                     if depth_map is not None:
@@ -314,14 +318,14 @@ def process_single_config(config, args, tf_manager):
                     ts_list[idx] = image_data.stamp
                     successful_odom += 1
 
-                    if args.verbose:
+                    if args.viz:
                         camera_poses.append(cam_7d)
 
         if extract_odom:
             save_poses_to_file(pose_list, pose_save_dir)
             save_timestamps_to_file(ts_list, pose_save_dir)
 
-        if args.verbose and len(camera_poses) > 0:
+        if args.viz and len(camera_poses) > 0:
             print(f"Showing visualization with {len(camera_poses)} camera poses, {len(odom_poses)} odom poses...")
             visualize_trajectories(odom_poses, camera_poses, config)
 
@@ -385,7 +389,8 @@ if __name__ == "__main__":
     parser.add_argument("--idx", type=int, nargs='+', default=None,
                        help="Frame index/indices to debug. One value debugs a single frame; "
                             "two values [start end] debug an inclusive range and visualize the odom trajectory.")
-    parser.add_argument("--verbose", action="store_true", help="Verbose mode prints more and visualizes")
+    parser.add_argument("--verbose", action="store_true", help="Verbose per-frame printouts")
+    parser.add_argument("--viz", action="store_true", help="Show visualizations (depth plots, trajectory viewer)")
 
     args = parser.parse_args()
     main(args)

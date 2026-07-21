@@ -106,8 +106,8 @@ if __name__ == '__main__':
     
     calib_dict = read_kalibr_stereo(config)
     
-    left_imgs = sorted(glob.glob(os.path.join(args.dataset, config['left_dir'], '*.png')))
-    right_imgs = sorted(glob.glob(os.path.join(args.dataset, config['right_dir'], '*.png')))
+    left_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['left_dir'], '*.png')))
+    right_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['right_dir'], '*.png')))
     
     print(f"Found {len(left_imgs)} left images and {len(right_imgs)} right images")
     assert len(left_imgs) == len(right_imgs), "Left and right image directories must have the same number of images"
@@ -117,8 +117,8 @@ if __name__ == '__main__':
     os.makedirs(left_out_dir, exist_ok=True)
     os.makedirs(right_out_dir, exist_ok=True)
     
-    left_timestamps = os.path.join(args.dataset, config['left_dir'], 'timestamps.txt')
-    right_timestamps = os.path.join(args.dataset, config['right_dir'], 'timestamps.txt')
+    left_timestamps = os.path.join(args.dataset, "sensors", config['left_dir'], 'timestamps.txt')
+    right_timestamps = os.path.join(args.dataset, "sensors", config['right_dir'], 'timestamps.txt')
     shutil.copy(left_timestamps, os.path.join(left_out_dir, 'timestamps.txt'))
     shutil.copy(right_timestamps, os.path.join(right_out_dir, 'timestamps.txt'))
 
