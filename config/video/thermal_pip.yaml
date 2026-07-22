@@ -3,7 +3,10 @@ hud:
   enabled: true
   odom_kitti_dir: sensors/novatel_gps_odom  # KITTI group/name dir: meter-frame odom for speed + minimap
   imu_kitti_dir: sensors/novatel_imu         # KITTI group/name dir: linear_acceleration.x/y for the g-meter
-  gmeter_max_g: 2.0                       # g-meter dial full-scale radius
+  gmeter_max_g: 2.0                       # g-meter dial full-scale (fixed rings at 0.5g steps up to max_g)
+  gmeter_trail: 15                        # number of fading history dots on the g-meter
+  orient:                                 # 3D vehicle-orientation widget (below the g-meter)
+    enabled: true                         # built-in low-poly car showing roll/pitch/yaw on a ground plane
   map_tif: src/core/mission_manager/gps_maps/gascola.tif  # GeoTIFF minimap background (or null)
   map_source: auto                        # auto | tif | track | osm
   allow_network_tiles: false              # allow network map tiles when map_source: osm
