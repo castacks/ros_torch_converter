@@ -74,7 +74,7 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video=True, video_config="", reannotate=False, reannotate_config="",
                 reannotated_dir="", reannotate_timeout=None, domain_queue=None,
-                stager=None, data_dir=None):
+                stager=None, data_dir=None, s3_dst_dir=""):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = tempfile.mkdtemp(prefix="osmo_pipeline_kitti_")
     reann_dir = None
@@ -136,6 +136,13 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...")
             shutil.copytree(out_dir, local_dst, dirs_exist_ok=True)
+
+        if s3_dst_dir:
+            s3_dst = os.path.join(s3_dst_dir, relpath)
+            print(f"[convert] {relpath}: copying result to S3 output mount {s3_dst} ...")
+            if os.path.dirname(s3_dst):
+                os.makedirs(os.path.dirname(s3_dst), exist_ok=True)
+            shutil.copytree(out_dir, s3_dst, dirs_exist_ok=True)
         return relpath, True, None
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e)
@@ -156,6 +163,7 @@ def parse_args():
     parser.add_argument("--pipeline_config", required=True,
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
+    parser.add_argument("--s3_dst_dir", default="", help="if set, additionally copy each converted KITTI dataset to <s3_dst_dir>/<relpath> (a local path, e.g. an OSMO S3-output mount)")
     return parser.parse_args()
 
 
@@ -221,7 +229,7 @@ def main():
                     render_video, video_config,
                     reannotate, reannotate_config, reannotated_dir,
                     reannotate_timeout, domain_queue,
-                    stager, args.data_dir,
+                    stager, args.data_dir, args.s3_dst_dir,
                 ): relpath
                 for relpath in pending
             }
