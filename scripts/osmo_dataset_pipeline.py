@@ -1,7 +1,6 @@
 """OSMO dataset discovery + conversion pipeline driver."""
 
 import argparse
-import json
 import multiprocessing
 import os
 import shutil
@@ -12,43 +11,37 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
 
-from tartandriver_utils.os_utils import is_kitti_dir
+from tartandriver_utils.os_utils import is_kitti_dir, is_rosbag_dir_filenames, load_yaml
+from tartandriver_utils.rclone_stager import RcloneStager
 
-from osmo_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
+from headless_bag_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
 
-
-RCLONE_REMOTE = "airlab_storage"
-
-# --multi-thread-streams=0: airlab_storage (FTP) mishandles chunked downloads.
-# --stats-one-line: avoid carriage-return redraws in captured task logs.
-RCLONE_FLAGS = ["--multi-thread-streams=0", "--transfers=10", "--stats=15s", "--stats-one-line"]
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONVERTER_SCRIPT = os.path.join(SCRIPT_DIR, "ros2bag_2_kitti_multiproc.py")
 CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)
 
 
-def resolve_kitti_config(kitti_config):
-    if os.path.isabs(kitti_config):
-        return kitti_config
-    return os.path.join(CONVERTER_PACKAGE_DIR, kitti_config)
+def resolve_config_path(path):
+    """Resolve `path` against the ros_torch_converter package dir if it isn't already absolute."""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(CONVERTER_PACKAGE_DIR, path)
 
 
-def rclone_copy(src, dst):
-    subprocess.run(["rclone", "copy", src, dst] + RCLONE_FLAGS, check=True)
+def local_lsdir_recursive(root_dir):
+    """Local-filesystem equivalent of RcloneStager.list(), for full-copy (data_dir) mode."""
+    entries = []
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        relpath = os.path.relpath(dirpath, root_dir)
+        for name in filenames:
+            entries.append({"IsDir": False, "Path": os.path.normpath(os.path.join(relpath, name))})
+    return entries
 
 
-def rclone_lsjson_recursive(remote_path):
-    result = subprocess.run(
-        ["rclone", "lsjson", "--recursive", remote_path],
-        stdout=subprocess.PIPE, text=True, check=True,
-    )
-    return json.loads(result.stdout)
-
-
-def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None):
-    """Find run-dirs under airlab_storage:root_dir with metadata.yaml + >=1 .mcap, at any depth."""
-    entries = rclone_lsjson_recursive(f"{RCLONE_REMOTE}:{root_dir}")
+def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager=None, data_dir=None):
+    """Find run-dirs under root_dir with metadata.yaml + >=1 .mcap, at any depth."""
+    entries = stager.list(root_dir) if stager else local_lsdir_recursive(os.path.join(data_dir, root_dir))
 
     filenames_by_dir = {}
     for entry in entries:
@@ -63,37 +56,40 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None):
             continue
         if any(part in exclude_subdirs for part in relpath.split("/")):
             continue
-        if "metadata.yaml" in filenames and any(f.endswith(".mcap") for f in filenames):
+        if is_rosbag_dir_filenames(filenames):
             run_dirs.append(relpath)
 
     return sorted(run_dirs)
 
 
-def filter_unconverted(run_dirs, kitti_input_mount):
+def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
     """Drop run-dirs that already have a completed KITTI dataset at the destination."""
-    return [
-        relpath for relpath in run_dirs
-        if not is_kitti_dir(os.path.join(kitti_input_mount, relpath))
-    ]
+    if stager:
+        return [relpath for relpath in run_dirs
+                if not stager.exists(os.path.join(dst_dir, relpath))]
+    return [relpath for relpath in run_dirs
+            if not is_kitti_dir(os.path.join(data_dir, dst_dir, relpath))]
 
 
-def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
-                converter_extra_args, render_video=True, video_config="",
-                reannotate=False, reannotate_config="", reannotated_dir="",
-                reannotate_timeout=None, domain_queue=None):
+def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
+                render_video=True, video_config="", reannotate=False, reannotate_config="",
+                reannotated_dir="", reannotate_timeout=None, domain_queue=None,
+                stager=None, data_dir=None):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
+    out_dir = tempfile.mkdtemp(prefix="osmo_pipeline_kitti_")
     reann_dir = None
     domain_id = None
-    out_dir = os.path.join(kitti_output_mount, relpath)
-    os.makedirs(out_dir, exist_ok=True)
 
     try:
-        print(f"[convert] {relpath}: copying raw bag from {RCLONE_REMOTE} ...")
-        rclone_copy(f"{RCLONE_REMOTE}:{os.path.join(root_dir, relpath)}", scratch_dir)
+        if stager:
+            print(f"[convert] {relpath}: copying raw bag from {stager.remote} ...")
+            stager.copy_in(os.path.join(root_dir, relpath), scratch_dir)
+            src_dir = scratch_dir
+        else:
+            src_dir = os.path.join(data_dir, root_dir, relpath)
 
         # Reannotate with super_odometry first if the raw bag is missing it.
-        src_dir = scratch_dir
-        if reannotate and not bag_has_superodometry(scratch_dir):
+        if reannotate and not bag_has_superodometry(src_dir):
             # Checked out for this bag's playback only, then released below.
             if domain_queue is not None:
                 domain_id = domain_queue.get()
@@ -102,17 +98,21 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
             reann_dir = tempfile.mkdtemp(prefix="osmo_pipeline_reann_")
             reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
             src_dir = reannotate_bag(
-                scratch_dir, reann_dir, domain_id=domain_id,
+                src_dir, reann_dir, domain_id=domain_id,
                 timeout=reannotate_timeout, **reann_kwargs,
             )
             if reannotated_dir:
-                print(f"[reannotate] {relpath}: copying reannotated bag to "
-                      f"{RCLONE_REMOTE}:{reannotated_dir} ...")
-                rclone_copy(src_dir, f"{RCLONE_REMOTE}:{os.path.join(reannotated_dir, relpath)}")
+                if stager:
+                    print(f"[reannotate] {relpath}: copying reannotated bag to "
+                          f"{stager.remote}:{reannotated_dir} ...")
+                    stager.copy_out(src_dir, os.path.join(reannotated_dir, relpath))
+                else:
+                    print(f"[reannotate] {relpath}: no stager configured -- skipping "
+                          f"reannotated_dir save")
 
         cmd = [
             sys.executable, CONVERTER_SCRIPT,
-            "--config", resolve_kitti_config(kitti_config),
+            "--config", resolve_config_path(pipeline_config),
             "--src_dir", src_dir,
             "--dst_dir", out_dir,
             "--force",
@@ -120,7 +120,7 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
         if not render_video:
             cmd.append("--no_render_video")
         elif video_config:
-            cmd.extend(["--video_config", resolve_kitti_config(video_config)])
+            cmd.extend(["--video_config", resolve_config_path(video_config)])
         if converter_extra_args:
             cmd.extend(converter_extra_args.split())
 
@@ -128,8 +128,14 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
         if proc.returncode != 0:
             return relpath, False, f"conversion exited with code {proc.returncode}"
 
-        print(f"[convert] {relpath}: copying result to {RCLONE_REMOTE}:{dst_dir} ...")
-        rclone_copy(out_dir, f"{RCLONE_REMOTE}:{os.path.join(dst_dir, relpath)}")
+        dst_relpath = os.path.join(dst_dir, relpath)
+        if stager:
+            print(f"[convert] {relpath}: copying result to {stager.remote}:{dst_relpath} ...")
+            stager.copy_out(out_dir, dst_relpath)
+        else:
+            local_dst = os.path.join(data_dir, dst_relpath)
+            print(f"[convert] {relpath}: copying result to {local_dst} ...")
+            shutil.copytree(out_dir, local_dst, dirs_exist_ok=True)
         return relpath, True, None
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e)
@@ -137,48 +143,51 @@ def convert_one(relpath, root_dir, dst_dir, kitti_output_mount, kitti_config,
         if domain_id is not None and domain_queue is not None:
             domain_queue.put(domain_id)  # release the domain for the next bag
         shutil.rmtree(scratch_dir, ignore_errors=True)
+        shutil.rmtree(out_dir, ignore_errors=True)
         if reann_dir is not None:
             shutil.rmtree(reann_dir, ignore_errors=True)
 
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", required=True, help="rclone airlab_storage: root to scan for run-dirs")
-    parser.add_argument("--dst_dir", required=True, help="rclone airlab_storage: path for the final KITTI copy-back")
-    parser.add_argument("--kitti_input_mount", required=True, help="local mount to check for already-converted datasets")
-    parser.add_argument("--kitti_output_mount", required=True, help="local mount to write converted datasets to")
-    parser.add_argument("--exclude_subdirs", default="calibration", help="comma-separated subfolder names to skip, or 'none'")
-    parser.add_argument("--kitti_config", required=True, help="path to the ros_torch_converter kitti config yaml")
-    parser.add_argument("--num_conversion_workers", type=int, default=4)
-    parser.add_argument("--converter_extra_args", default="", help="passthrough args for ros2bag_2_kitti_multiproc.py")
+    parser.add_argument("--root_dir", required=True, help="root to scan for run-dirs (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
+    parser.add_argument("--dst_dir", required=True, help="destination for the final KITTI copy-back (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
+    parser.add_argument("--data_dir", default="", help="local mount root for full-copy mode (bulk_copy.sh); when set, reads/writes go straight to this mount instead of through an RcloneStager")
+    parser.add_argument("--pipeline_config", required=True,
+                        help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
-    parser.add_argument("--render_video", default="true", help="render output videos ('true'/'false')")
-    parser.add_argument("--video_config", default="", help="path to a video render config yaml (HUD + PiP); relative to the converter package")
-    parser.add_argument("--reannotate", default="false", help="reannotate bags missing super_odometry before converting ('true'/'false')")
-    parser.add_argument("--reannotate_config", default="", help="tartandriver_deploy playback config defining the reannotation stack + knobs; required if --reannotate is true")
     return parser.parse_args()
-
-
-def str2bool(s):
-    return str(s).strip().lower() not in ("false", "0", "no", "off", "")
 
 
 def main():
     args = parse_args()
 
-    if args.exclude_subdirs.strip().lower() in ("", "none"):
+    stager = RcloneStager() if not args.data_dir else None
+
+    cfg = load_yaml(args.pipeline_config)
+    pcfg = cfg.get("pipeline", {}) or {}
+
+    num_conversion_workers = int(pcfg.get("num_conversion_workers", 4))
+    converter_extra_args = pcfg.get("converter_extra_args", "") or ""
+    render_video = bool(pcfg.get("render_video", True))
+    video_config = pcfg.get("video_config", "") or ""
+    reannotate = bool(pcfg.get("reannotate", False))
+    reannotate_config_arg = pcfg.get("reannotate_config", "") or ""
+
+    exclude_subdirs_raw = str(pcfg.get("exclude_subdirs", "calibration") or "")
+    if exclude_subdirs_raw.strip().lower() in ("", "none"):
         exclude_subdirs = set()
     else:
-        exclude_subdirs = {s.strip() for s in args.exclude_subdirs.split(",") if s.strip()}
+        exclude_subdirs = {s.strip() for s in exclude_subdirs_raw.split(",") if s.strip()}
 
-    print(f"[discovery] scanning {RCLONE_REMOTE}:{args.root_dir} (exclude_subdirs={sorted(exclude_subdirs)})")
-    run_dirs = find_rosbag_run_dirs(args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder)
+    scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
+    print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
+    run_dirs = find_rosbag_run_dirs(args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder,
+                                     stager=stager, data_dir=args.data_dir)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
-    pending = filter_unconverted(run_dirs, args.kitti_input_mount)
+    pending = filter_unconverted(run_dirs, args.dst_dir, stager=stager, data_dir=args.data_dir)
     print(f"[discovery] {len(pending)} pending (not yet converted)")
-
-    reannotate = str2bool(args.reannotate)
 
     # Stack + reannotated_dir/timeout all come from reannotate_config's `reannotation:` block.
     reannotate_config = ""
@@ -186,8 +195,8 @@ def main():
     domain_queue = None
     manager = None
     if reannotate:
-        assert args.reannotate_config, "--reannotate_config is required when --reannotate is true"
-        reannotate_config = resolve_deploy_path(args.reannotate_config)
+        assert reannotate_config_arg, "pipeline.reannotate_config is required when pipeline.reannotate is true"
+        reannotate_config = resolve_deploy_path(reannotate_config_arg)
         with open(reannotate_config) as f:
             rsec = (yaml.safe_load(f) or {}).get("reannotation", {}) or {}
         reannotated_dir = rsec.get("reannotated_dir", "") or ""
@@ -199,19 +208,20 @@ def main():
         # One distinct ROS_DOMAIN_ID per worker guarantees no two concurrent bags collide.
         manager = multiprocessing.Manager()
         domain_queue = manager.Queue()
-        for k in range(args.num_conversion_workers):
+        for k in range(num_conversion_workers):
             domain_queue.put(1 + (k % 100))  # ROS_DOMAIN_ID kept within 1..100
 
     succeeded, failed = [], []
     if pending:
-        with ProcessPoolExecutor(max_workers=args.num_conversion_workers) as pool:
+        with ProcessPoolExecutor(max_workers=num_conversion_workers) as pool:
             futures = {
                 pool.submit(
                     convert_one, relpath, args.root_dir, args.dst_dir,
-                    args.kitti_output_mount, args.kitti_config, args.converter_extra_args,
-                    str2bool(args.render_video), args.video_config,
+                    args.pipeline_config, converter_extra_args,
+                    render_video, video_config,
                     reannotate, reannotate_config, reannotated_dir,
                     reannotate_timeout, domain_queue,
+                    stager, args.data_dir,
                 ): relpath
                 for relpath in pending
             }

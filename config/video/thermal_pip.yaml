@@ -1,8 +1,8 @@
 # Video render config: describes *what* the output videos contain.
 hud:
   enabled: true
-  odom_topic: /odometry/filtered_odom     # meter-frame odom for speed + minimap
-  imu_topic: /novatel/imu/data            # linear_acceleration.x/y for the g-meter
+  odom_kitti_dir: sensors/novatel_gps_odom  # KITTI group/name dir: meter-frame odom for speed + minimap
+  imu_kitti_dir: sensors/novatel_imu         # KITTI group/name dir: linear_acceleration.x/y for the g-meter
   gmeter_max_g: 2.0                       # g-meter dial full-scale radius
   map_tif: src/core/mission_manager/gps_maps/gascola.tif  # GeoTIFF minimap background (or null)
   map_source: auto                        # auto | tif | track | osm

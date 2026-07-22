@@ -134,30 +134,6 @@ class TfTree:
 
         return branch
 
-    def get_children(self, frame_id):
-        return [node for node in self.nodes.values() if node.parent_frame_id == frame_id]
-
-    def clone_descendants(self, source_root, target_root, suffix):
-        """
-        Clone every node in source_root's subtree onto a new root target_root,
-        suffixing frame ids so the clones don't collide with the originals.
-        """
-        frontier = [(child, target_root) for child in self.get_children(source_root)]
-
-        while frontier:
-            node, new_parent_id = frontier.pop()
-            new_frame_id = node.frame_id + suffix
-
-            if node.is_static:
-                clone = TfNode(new_frame_id, new_parent_id, [node.transform.copy()], None, is_static=True)
-            else:
-                clone = TfNode(new_frame_id, new_parent_id, node.transforms.copy(), node.times.copy(), is_static=False)
-
-            self.nodes[new_frame_id] = clone
-            frontier.extend((child, new_frame_id) for child in self.get_children(node.frame_id))
-
-        self.recompute_depth()
-
     def get_valid_time_range(self, frame_id):
         """
         Time range for which frame_id is resolvable, based on its own ancestor chain
@@ -274,16 +250,6 @@ class TfManager:
     def add_tf(self, src_frame, dst_frame, transforms, times):
         return self.tf_tree.add_tf(parent_frame_id=src_frame, frame_id=dst_frame, transforms=transforms, times=times)
 
-    def apply_tf_aliases(self, tf_aliases):
-        """
-        For each {alias_root, source_root, alias_parent, suffix} rule, clone
-        source_root's static descendant subtree onto alias_root (which from_rosbag
-        should have already registered as alias_parent->alias_root). Call after
-        update_from_calib_config so the clones pick up the calibrated static values.
-        """
-        for rule in (tf_aliases or []):
-            self.tf_tree.clone_descendants(rule['source_root'], rule['alias_root'], rule['suffix'])
-
     def to_kitti(self, run_dir):
         base_dir = os.path.join(run_dir, 'tf')
 
@@ -353,19 +319,8 @@ class TfManager:
     
         return tf_manager
 
-    def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu', tf_aliases=None):
-        """
-        tf_aliases: list of {alias_root, source_root, alias_parent, suffix} dicts.
-        Any (alias_parent -> source_root) transform is stored under alias_root instead
-        of source_root, so a second publisher of the same child frame (e.g. a second
-        odometry source) doesn't collide with / get dropped by the primary one.
-        """
+    def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu'):
         tf_manager = TfManager(device)
-
-        alias_by_parent_child = {
-            (rule['alias_parent'], rule['source_root']): rule['alias_root']
-            for rule in (tf_aliases or [])
-        }
 
         bag_fps = sorted([x for x in os.listdir(rosbag_fp) if '.mcap' in x])
 
@@ -390,11 +345,9 @@ class TfManager:
                     dst_frame = tf_msg.child_frame_id
                     t = stamp_to_time(tf_msg.header.stamp)
 
-                    key = alias_by_parent_child.get((src_frame, dst_frame), dst_frame)
-
-                    if key not in frames.keys():
-                        frames[key] = {
-                            'frame_id': key,
+                    if dst_frame not in frames.keys():
+                        frames[dst_frame] = {
+                            'frame_id': dst_frame,
                             'parent_frame_id': src_frame,
                             'is_static': topic == '/tf_static',
                             'transforms': np.zeros([0, 7]),
@@ -402,12 +355,12 @@ class TfManager:
                         }
                     else:
                         # Skip transforms that try to rewire the tf tree
-                        if src_frame != frames[key]['parent_frame_id']:
-                            print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[key]['parent_frame_id']}->{key})")
+                        if src_frame != frames[dst_frame]['parent_frame_id']:
+                            print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[dst_frame]['parent_frame_id']}->{dst_frame})")
                             continue
 
-                    if dt > 0. and len(frames[key]['times']) > 0:
-                        if t - frames[key]['times'][-1] < dt:
+                    if dt > 0. and len(frames[dst_frame]['times']) > 0:
+                        if t - frames[dst_frame]['times'][-1] < dt:
                             continue
 
                     tf_data = np.array([
@@ -420,8 +373,8 @@ class TfManager:
                         tf_msg.transform.rotation.w
                     ])
 
-                    frames[key]['times'] = np.append(frames[key]['times'], t)
-                    frames[key]['transforms'] = np.append(frames[key]['transforms'], tf_data.reshape(1,7), axis=0)
+                    frames[dst_frame]['times'] = np.append(frames[dst_frame]['times'], t)
+                    frames[dst_frame]['transforms'] = np.append(frames[dst_frame]['transforms'], tf_data.reshape(1,7), axis=0)
                     
                 cnt += 1
 

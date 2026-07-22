@@ -7,7 +7,6 @@ import time
 
 import yaml
 
-# Must match the non-optional entries in config/topics/yamaha/super_odometry_topics.yaml.
 SO_TOPICS = [
     "/superodometry/integrated_to_init",
     "/superodometry/velodyne_cloud_registered",
@@ -43,7 +42,6 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
     with open(registry_path, "r") as f:
         registry = yaml.safe_load(f)
 
-    # Mirrors the deploy global_parameters (global_parameters/rosbag_playback.yaml).
     extra = []
     if use_sim_time:
         extra.append("use_sim_time:=true")

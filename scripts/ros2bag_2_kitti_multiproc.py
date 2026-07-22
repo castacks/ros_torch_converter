@@ -126,82 +126,6 @@ def check_missing_types(config):
     print("All message types have converters available ✓")
 
 
-def collect_video_hud_odom(bagpath, typestore, odom_topic, use_bag_time=False):
-    """
-    Collect meter-frame odometry and speed for rendered video HUD overlays.
-    """
-    positions = []
-    times = []
-    speeds = []
-
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
-        bag_start_time = reader.start_time * 1e-9
-        connections = [x for x in reader.connections if x.topic == odom_topic]
-        if not connections:
-            print(f"  [hud] odom topic not found: {odom_topic}; rendering timestamp-only HUD")
-            return {
-                "gps_xy": np.zeros((0, 2), dtype=np.float64),
-                "gps_times": np.zeros((0,), dtype=np.float64),
-                "speed_mps": np.zeros((0,), dtype=np.float64),
-                "speed_times": np.zeros((0,), dtype=np.float64),
-                "bag_start_time": bag_start_time,
-            }
-
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
-            msg = reader.deserialize(rawdata, connection.msgtype)
-            if hasattr(msg, "header") and not use_bag_time:
-                msg_time = stamp_to_time(msg.header.stamp)
-            else:
-                msg_time = timestamp * 1e-9
-
-            pos = msg.pose.pose.position
-            vel = msg.twist.twist.linear
-            positions.append([pos.x, pos.y])
-            times.append(msg_time)
-            speeds.append(np.linalg.norm([vel.x, vel.y, vel.z]))
-
-    return {
-        "gps_xy": np.asarray(positions, dtype=np.float64).reshape(-1, 2),
-        "gps_times": np.asarray(times, dtype=np.float64),
-        "speed_mps": np.asarray(speeds, dtype=np.float64),
-        "speed_times": np.asarray(times, dtype=np.float64),
-        "bag_start_time": bag_start_time,
-    }
-
-
-def collect_video_hud_imu(bagpath, typestore, imu_topic, use_bag_time=False):
-    """
-    Collect body-frame linear acceleration (x, y) for the rendered video HUD's
-    g-meter. Expects a sensor_msgs/Imu message.
-    """
-    accel_xy = []
-    times = []
-
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
-        connections = [x for x in reader.connections if x.topic == imu_topic]
-        if not connections:
-            print(f"  [hud] imu topic not found: {imu_topic}; g-meter HUD disabled")
-            return {
-                "accel_xy": np.zeros((0, 2), dtype=np.float64),
-                "times": np.zeros(0, dtype=np.float64),
-            }
-
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
-            msg = reader.deserialize(rawdata, connection.msgtype)
-            if hasattr(msg, "header") and not use_bag_time:
-                msg_time = stamp_to_time(msg.header.stamp)
-            else:
-                msg_time = timestamp * 1e-9
-            accel = msg.linear_acceleration
-            accel_xy.append([float(accel.x), float(accel.y)])
-            times.append(msg_time)
-
-    return {
-        "accel_xy": np.asarray(accel_xy, dtype=np.float64).reshape(-1, 2),
-        "times": np.asarray(times, dtype=np.float64),
-    }
-
-
 def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_color=False):
     """
     Monitor and display progress in a live-updating dashboard style.
@@ -531,19 +455,15 @@ if __name__ == '__main__':
     if not has_calib_file:
         print('no calib file provided. Note that for Yamaha data this is probably wrong!')
 
-    tf_aliases = config.get('tf_aliases', [])
-
     if args.skip_tf:
         print('Skipping TF processing as requested...')
         tf_manager = None
     else:
         print('\n3. Handle TF')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda', tf_aliases=tf_aliases)
+        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
-
-        tf_manager.apply_tf_aliases(tf_aliases)
 
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
@@ -782,10 +702,9 @@ if __name__ == '__main__':
 
     if not args.no_render_video:
         from tartandriver_utils.video_utils import (
-            render_kitti_video, render_kitti_video_with_hud, load_video_config)
+            render_dataset_videos, collect_video_hud_odom, collect_video_hud_imu, load_video_config)
         print('\n6. Rendering videos...')
         viz_dir = os.path.join(args.dst_dir, 'viz')
-        os.makedirs(viz_dir, exist_ok=True)
 
         vcfg = load_video_config(args.video_config)
         hud = vcfg["hud"]
@@ -793,62 +712,12 @@ if __name__ == '__main__':
         hud_data = None
         imu_data = None
         if hud is not None:
-            print(f"  [hud] collecting odometry from {hud['odom_topic']}")
-            hud_data = collect_video_hud_odom(
-                bagpath,
-                typestore,
-                hud['odom_topic'],
-                use_bag_time=args.use_bag_time,
-            )
-            print(f"  [hud] collecting imu data from {hud['imu_topic']}")
-            imu_data = collect_video_hud_imu(
-                bagpath,
-                typestore,
-                hud['imu_topic'],
-                use_bag_time=args.use_bag_time,
-            )
+            print(f"  [hud] collecting odometry from {hud['odom_kitti_dir']}")
+            hud_data = collect_video_hud_odom(args.dst_dir, hud['odom_kitti_dir'])
+            print(f"  [hud] collecting imu data from {hud['imu_kitti_dir']}")
+            imu_data = collect_video_hud_imu(args.dst_dir, hud['imu_kitti_dir'])
 
-        # Group PiP insets by their main modality, keeping only insets that are
-        # actually present in this dataset (existence gate).
-        pip_by_main = {}
-        for spec in vcfg["pip"]:
-            inset_key = spec['inset']
-            if inset_key not in filt_cvt_info:
-                print(f"  [pip] inset modality '{inset_key}' not in dataset; skipping")
-                continue
-            pip_by_main.setdefault(spec['main'], []).append({
-                'dir': filt_cvt_info[inset_key]['dir'],
-                'scale': spec.get('scale', 0.25),
-                'pos': spec.get('pos', 'bottom-right'),
-                'margin': spec.get('margin', 16),
-                'border': spec.get('border', 3),
-                'border_color': spec.get('border_color', 'white'),
-            })
-
-        for cinfo in filt_cvt_info.values():
-            video_name = f"{cinfo['group']}_{cinfo['name']}.mp4"
-            output_path = os.path.join(viz_dir, video_name)
-            pip = pip_by_main.get(f"{cinfo['group']}/{cinfo['name']}")
-            if hud is not None:
-                render_kitti_video_with_hud(
-                    cinfo['dir'],
-                    output_path=output_path,
-                    gps_xy=hud_data["gps_xy"],
-                    gps_times=hud_data["gps_times"],
-                    speed_mps=hud_data["speed_mps"],
-                    speed_times=hud_data["speed_times"],
-                    bag_start_time=hud_data["bag_start_time"],
-                    overlay_root=os.path.join(viz_dir, 'overlays'),
-                    map_tif=hud['map_tif'],
-                    map_source=hud['map_source'],
-                    allow_network_tiles=hud['allow_network_tiles'],
-                    n_workers=hud['workers'],
-                    accel_xy=imu_data["accel_xy"] if imu_data is not None else None,
-                    accel_times=imu_data["times"] if imu_data is not None else None,
-                    gmeter_max_g=hud['gmeter_max_g'],
-                    pip=pip,
-                )
-            else:
-                render_kitti_video(cinfo['dir'], output_path=output_path, pip=pip)
+        modality_dirs = {f"{c['group']}/{c['name']}": c['dir'] for c in filt_cvt_info.values()}
+        render_dataset_videos(modality_dirs, vcfg, viz_dir, hud_data=hud_data, imu_data=imu_data)
 
     print(f'\nDone processing {queue["target_times"].shape[0]} frames.')
