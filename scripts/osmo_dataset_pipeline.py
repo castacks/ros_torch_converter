@@ -74,9 +74,16 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video=True, video_config="", reannotate=False, reannotate_config="",
                 reannotated_dir="", reannotate_timeout=None, domain_queue=None,
-                stager=None, data_dir=None, s3_dst_dir=""):
+                stager=None, data_dir=None, local_out_dir=""):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
-    out_dir = tempfile.mkdtemp(prefix="osmo_pipeline_kitti_")
+    # When local_out_dir is set the converted dataset is written to a known,
+    # persistent location (<local_out_dir>/<relpath>) that the caller can read
+    # afterwards; otherwise it goes to a scratch tempdir deleted after copy-back.
+    if local_out_dir:
+        out_dir = os.path.join(local_out_dir, relpath)
+        os.makedirs(out_dir, exist_ok=True)
+    else:
+        out_dir = tempfile.mkdtemp(prefix="osmo_pipeline_kitti_")
     reann_dir = None
     domain_id = None
 
@@ -136,13 +143,6 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...")
             shutil.copytree(out_dir, local_dst, dirs_exist_ok=True)
-
-        if s3_dst_dir:
-            s3_dst = os.path.join(s3_dst_dir, relpath)
-            print(f"[convert] {relpath}: copying result to S3 output mount {s3_dst} ...")
-            if os.path.dirname(s3_dst):
-                os.makedirs(os.path.dirname(s3_dst), exist_ok=True)
-            shutil.copytree(out_dir, s3_dst, dirs_exist_ok=True)
         return relpath, True, None
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e)
@@ -150,7 +150,8 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         if domain_id is not None and domain_queue is not None:
             domain_queue.put(domain_id)  # release the domain for the next bag
         shutil.rmtree(scratch_dir, ignore_errors=True)
-        shutil.rmtree(out_dir, ignore_errors=True)
+        if not local_out_dir:  # keep the dataset when a known output dir was requested
+            shutil.rmtree(out_dir, ignore_errors=True)
         if reann_dir is not None:
             shutil.rmtree(reann_dir, ignore_errors=True)
 
@@ -163,7 +164,7 @@ def parse_args():
     parser.add_argument("--pipeline_config", required=True,
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
-    parser.add_argument("--s3_dst_dir", default="", help="if set, additionally copy each converted KITTI dataset to <s3_dst_dir>/<relpath> (a local path, e.g. an OSMO S3-output mount)")
+    parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally")
     return parser.parse_args()
 
 
@@ -229,7 +230,7 @@ def main():
                     render_video, video_config,
                     reannotate, reannotate_config, reannotated_dir,
                     reannotate_timeout, domain_queue,
-                    stager, args.data_dir, args.s3_dst_dir,
+                    stager, args.data_dir, args.local_out_dir,
                 ): relpath
                 for relpath in pending
             }
