@@ -164,7 +164,7 @@ def main():
 
     stager = RcloneStager() if not args.data_dir else None
 
-    cfg = load_yaml(args.pipeline_config)
+    cfg = load_yaml(resolve_config_path(args.pipeline_config))
     pcfg = cfg.get("pipeline", {}) or {}
 
     num_conversion_workers = int(pcfg.get("num_conversion_workers", 4))
