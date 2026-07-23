@@ -119,7 +119,8 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
                    models_dir=None, use_sim_time=True, settle=8.0,
                    record_settle=2.0, shutdown_grace=15.0, timeout=None,
                    localhost_only=True):
-    """Reannotate a single bag headlessly (own ROS_DOMAIN_ID + ROS_LOCALHOST_ONLY for batch isolation); returns the recorded bag path."""
+    """Reannotate a single bag headlessly; returns the resulting bag path (merged with
+    the untouched original when `rosbag_record.topics` is a list of topics)."""
     if models_dir is None:
         models_dir = default_models_dir()
     spec = build_stack_from_config(config_path, registry_path,
@@ -140,7 +141,10 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
 
     os.makedirs(out_dir, exist_ok=True)
     bag_name = os.path.basename(os.path.normpath(src_dir))
-    record_path = os.path.join(out_dir, bag_name)
+    # 'all' is the legacy no-merge path; a topic list triggers merge_bags() below.
+    merge_new_topics = record_topics != "all"
+    record_path = os.path.join(out_dir, bag_name + "_new_topics") if merge_new_topics \
+        else os.path.join(out_dir, bag_name)
 
     procs = []
 
@@ -156,7 +160,7 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
             start(launch)
         time.sleep(settle)
 
-        # 2. record everything; 'all' -> -a since $ALL_TOPICS isn't available in a headless pod.
+        # 2. record; 'all' -> -a since $ALL_TOPICS isn't available in a headless pod.
         record_cmd = ["ros2", "bag", "record", "--use-sim-time"]
         if record_topics == "all":
             record_cmd.append("-a")
@@ -166,7 +170,8 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
         record_proc = start(record_cmd)
         time.sleep(record_settle)  # let the recorder subscribe before data flows
 
-        # 3. play the source bag; blocks until the bag finishes
+        # 3. play the source bag; blocks until it finishes.
+        # --clock + --use-sim-time keep new topics on bag time, aligned for the merge.
         play_cmd = ["ros2", "bag", "play", src_dir, "--clock", "--rate", str(play_rate)]
         if start_offset is not None:
             play_cmd += ["--start-offset", str(start_offset)]
@@ -177,13 +182,33 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
         # 4. stop the recorder first so it flushes a complete mcap
         _sigint_group(record_proc)
         _wait_group(record_proc, shutdown_grace)
-        return record_path
+
+        if not merge_new_topics:
+            return record_path
+        return merge_bags(src_dir, record_path, out_dir, bag_name,
+                          storage_id=record_storage, env=env)
     finally:
         # 5. tear the whole stack down (reverse order); record already handled above
         for p in reversed(procs):
             _sigint_group(p)
         for p in reversed(procs):
             _wait_group(p, shutdown_grace)
+
+
+def merge_bags(bag_a, bag_b, out_dir, out_name, storage_id="mcap", env=None):
+    """Combine two bag dirs losslessly into `out_dir/out_name` via `ros2 bag convert`
+    (copies messages as-is, no live graph -- safe when originals must stay untouched)."""
+    merged_path = os.path.join(out_dir, out_name)
+    convert_opts_path = os.path.join(out_dir, out_name + "_convert_opts.yaml")
+    with open(convert_opts_path, "w") as f:
+        yaml.safe_dump({"output_bags": [
+            {"uri": merged_path, "storage_id": storage_id, "all": True},
+        ]}, f)
+    subprocess.run(
+        ["ros2", "bag", "convert", "-i", bag_a, "-i", bag_b, "-o", convert_opts_path],
+        env=env, check=True,
+    )
+    return merged_path
 
 
 def parse_args():

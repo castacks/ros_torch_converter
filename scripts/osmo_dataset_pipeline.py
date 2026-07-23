@@ -15,6 +15,8 @@ from tartandriver_utils.os_utils import is_kitti_dir, is_rosbag_dir_filenames, l
 from tartandriver_utils.rclone_stager import RcloneStager
 
 from headless_bag_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
+from bag_message_report import build_report, write_report
+from topic_sync_viz import render_sync_viz
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -97,6 +99,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
 
         # Reannotate with super_odometry first if the raw bag is missing it.
         if reannotate and not bag_has_superodometry(src_dir):
+            orig_src = src_dir
             # Checked out for this bag's playback only, then released below.
             if domain_queue is not None:
                 domain_id = domain_queue.get()
@@ -105,14 +108,26 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             reann_dir = tempfile.mkdtemp(prefix="osmo_pipeline_reann_")
             reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
             src_dir = reannotate_bag(
-                src_dir, reann_dir, domain_id=domain_id,
+                orig_src, reann_dir, domain_id=domain_id,
                 timeout=reannotate_timeout, **reann_kwargs,
             )
+
+            print(f"[reannotate] {relpath}: writing message-count report + sync viz ...")
+            report_rows = build_report(orig_src, src_dir)
+            write_report(report_rows, os.path.join(out_dir, "reannotate_report"))
+            try:
+                render_sync_viz(src_dir, resolve_config_path(pipeline_config),
+                                 os.path.join(out_dir, "topic_sync_viz.png"))
+            except Exception as e:
+                print(f"[reannotate] {relpath}: topic_sync_viz failed (non-fatal): {e}")
+
             if reannotated_dir:
+                # reannotated_dir is relative to dst_dir (same root as the KITTI copy-back).
+                bag_dst_relpath = os.path.join(dst_dir, reannotated_dir, relpath)
                 if stager:
                     print(f"[reannotate] {relpath}: copying reannotated bag to "
-                          f"{stager.remote}:{reannotated_dir} ...")
-                    stager.copy_out(src_dir, os.path.join(reannotated_dir, relpath))
+                          f"{stager.remote}:{bag_dst_relpath} ...")
+                    stager.copy_out(src_dir, bag_dst_relpath)
                 else:
                     print(f"[reannotate] {relpath}: no stager configured -- skipping "
                           f"reannotated_dir save")
@@ -213,6 +228,9 @@ def main():
         reannotate_timeout = float(t) if t not in ("", "none") else None
         print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing "
               f"super_odometry will be reannotated first")
+        if reannotated_dir:
+            print(f"[reannotate] merged reannotated bags will also be uploaded to "
+                  f"{reannotated_dir}")
 
         # One distinct ROS_DOMAIN_ID per worker guarantees no two concurrent bags collide.
         manager = multiprocessing.Manager()
