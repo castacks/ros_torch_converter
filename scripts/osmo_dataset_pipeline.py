@@ -31,6 +31,46 @@ def resolve_config_path(path):
     return os.path.join(CONVERTER_PACKAGE_DIR, path)
 
 
+def describe_mount(path):
+    """Backing mountpoint, filesystem type and free space for `path`.
+    """
+    real = os.path.realpath(path)
+    best = ("", "")
+    try:
+        with open("/proc/mounts") as f:
+            for line in f:
+                fields = line.split()
+                if len(fields) < 3:
+                    continue
+                mountpoint, fstype = fields[1], fields[2]
+                # Longest matching mountpoint prefix is the one actually backing `real`.
+                if (real == mountpoint or real.startswith(mountpoint.rstrip("/") + "/")) \
+                        and len(mountpoint) >= len(best[0]):
+                    best = (mountpoint, fstype)
+    except OSError:
+        pass
+
+    st = os.statvfs(real)
+    free_gb = st.f_bavail * st.f_frsize / 1024 ** 3
+    total_gb = st.f_blocks * st.f_frsize / 1024 ** 3
+    mountpoint, fstype = best or ("?", "?")
+    return f"{real} (mount={mountpoint or '?'} fstype={fstype or '?'} " \
+           f"free={free_gb:.1f}Gi/{total_gb:.1f}Gi)"
+
+
+def resolve_scratch_dir(scratch_dir):
+    """Pick the base dir for all staging tempdirs, and make `tempfile` honour it.
+    """
+    if not scratch_dir:
+        return tempfile.gettempdir()
+
+    resolved = os.path.abspath(os.path.expanduser(os.path.expandvars(scratch_dir)))
+    os.makedirs(resolved, exist_ok=True)
+    tempfile.tempdir = resolved
+    os.environ["TMPDIR"] = resolved
+    return resolved
+
+
 def local_lsdir_recursive(root_dir):
     """Local-filesystem equivalent of RcloneStager.list(), for full-copy (data_dir) mode."""
     entries = []
@@ -180,6 +220,7 @@ def parse_args():
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
     parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally")
+    parser.add_argument("--scratch_dir", default="", help="base dir for all staging tempdirs (raw bag, reannotation, KITTI); overrides pipeline.scratch_dir. Empty uses $TMPDIR, else /tmp")
     return parser.parse_args()
 
 
@@ -193,6 +234,7 @@ def main():
 
     num_conversion_workers = int(pcfg.get("num_conversion_workers", 4))
     converter_extra_args = pcfg.get("converter_extra_args", "") or ""
+    scratch_dir = args.scratch_dir or pcfg.get("scratch_dir", "") or ""
     render_video = bool(pcfg.get("render_video", True))
     video_config = pcfg.get("video_config", "") or ""
     reannotate = bool(pcfg.get("reannotate", False))
@@ -203,6 +245,9 @@ def main():
         exclude_subdirs = set()
     else:
         exclude_subdirs = {s.strip() for s in exclude_subdirs_raw.split(",") if s.strip()}
+
+    resolved_scratch = resolve_scratch_dir(scratch_dir)
+    print(f"[scratch] staging bags under {describe_mount(resolved_scratch)}")
 
     scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
