@@ -21,7 +21,7 @@ from tartandriver_utils.ros_utils import stamp_to_time
 from tartandriver_utils.os_utils import load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
-from ros_torch_converter.tf_manager import TfManager
+from ros_torch_converter.tf_manager import TfManager, TfTree
 from ros_torch_converter.datatypes.base import TimeSpec
 from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
 
@@ -458,6 +458,9 @@ if __name__ == '__main__':
     if not has_calib_file:
         print('no calib file provided. Note that for Yamaha data this is probably wrong!')
 
+    odometry_configs = config['odometry_tf'] if 'odometry_tf' in config.keys() else []
+    tf_inversions = config['tf_inversions'] if 'tf_inversions' in config.keys() else []
+
     if args.skip_tf:
         print('Skipping TF processing as requested...')
         tf_manager = None
@@ -465,10 +468,18 @@ if __name__ == '__main__':
         tf_tmax = np.inf
     else:
         print('\n3. Handle TF')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+        tf_manager = TfManager.from_rosbag(bagpath, odometry_configs=odometry_configs, tf_inversions=tf_inversions, device='cuda')
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
+
+        # if included in config, update odometry-specific tree with data from its calibration 
+        for odom_cfg in odometry_configs:
+            if 'calibration' in odom_cfg:
+                name = odom_cfg['name']
+                print(f"adding static tfs from calibration yaml for odometry source {name}")
+                odom_tree = tf_manager.odom_trees.setdefault(name, TfTree(nodes=[]))
+                tf_manager.update_from_calib_config(odom_cfg['calibration'], tree=odom_tree)
 
         tf_tmin, tf_tmax = tf_manager.get_valid_times_from_list(frame_list)
 

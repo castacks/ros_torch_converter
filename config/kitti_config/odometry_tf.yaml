@@ -1,0 +1,59 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.2
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  # new section for handling inverting tfs from rosbags
+  tf_inversions:
+    - from_frame: gq7_imu_link
+      to_frame: vehicle
+
+  # new section for handling several root nodes
+  odometry_tf:
+    - name: super_odometry
+      odometry:
+        parent_frame: sensor_init
+        child_frame: vehicle
+        bridge_frame: vehicle_so
+      # optional: static tfs defined in a yaml that are relevant to this odometry source's tf tree 
+      # (e.g., sensor_init -> sensor_init_rot)
+      calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/super_odometry.yaml
+      # static tfs from rosbag
+      bag_static_tfs:
+        - from_frame: /sensor_init
+          to_frame: /sensor_init_rot
+
+    - name: rtk
+      odometry:
+        parent_frame: earth
+        child_frame: gq7_imu_link
+        bridge_frame: vehicle_rtk
+      # static tfs from rosbag
+      bag_static_tfs: 
+        - from_frame: earth
+          to_frame: gq7_map_ned
+
+  topics:
+    - name: so_odom
+      group: odometry
+      topic: /superodometry/integrated_to_init #namespaced in new bags
+      type: OdomRBState
+      args: {}
+
+    - name: rgb_image_left_rect_color
+      group: sensors
+      topic: /multisense/left/image_rect_color
+      type: Image
+      args: {}
+
+    - name: rtk_odom
+      group: odometry
+      topic: /rtk_gps/ekf/odometry_earth
+      type: OdomRBState
+      args: {}
