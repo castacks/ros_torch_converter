@@ -62,6 +62,15 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
     play_rate = float(playback_args.get("--rate", 1.0))
     start_offset = playback_args.get("--start-offset", None)
 
+    handled = {"--rate", "--start-offset", "--remap"}
+    extra_play_args = []
+    for k, v in playback_args.items():
+        if k in handled:
+            continue
+        extra_play_args.append(str(k))
+        if v not in (None, ""):
+            extra_play_args.append(str(v))
+
     record = config.get("rosbag_record", {}) or {}
     record_storage = (record.get("args", {}) or {}).get("-s", "mcap")
 
@@ -72,6 +81,7 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
         "record_storage": record_storage,
         "play_rate": play_rate,
         "start_offset": None if start_offset in (None, "") else str(start_offset),
+        "extra_play_args": extra_play_args,
     }
 
 
@@ -131,6 +141,7 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
     record_storage = spec["record_storage"]
     play_rate = spec["play_rate"]
     start_offset = spec["start_offset"]
+    extra_play_args = spec.get("extra_play_args", [])
 
     env = os.environ.copy()
     if domain_id is not None:
@@ -175,8 +186,9 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
         play_cmd = ["ros2", "bag", "play", src_dir, "--clock", "--rate", str(play_rate)]
         if start_offset is not None:
             play_cmd += ["--start-offset", str(start_offset)]
+        play_cmd += list(extra_play_args)
         if remap:
-            play_cmd += ["--remap"] + list(remap)
+            play_cmd += ["--remap"] + list(remap)  # --remap consumes the rest, keep it last
         subprocess.run(play_cmd, env=env, timeout=timeout, check=True)
 
         # 4. stop the recorder first so it flushes a complete mcap

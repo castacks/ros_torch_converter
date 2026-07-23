@@ -4,11 +4,11 @@ import argparse
 import multiprocessing
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
-import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
@@ -49,22 +49,40 @@ def start_memory_logger(interval=60.0):
     limit = read("memory.max") or read("memory.limit_in_bytes")
     if read("memory.current") is None and read("memory.usage_in_bytes") is None:
         print("[mem] cgroup memory stats unavailable -- skipping memory logging")
-        return
+        return lambda: None
 
     gib = 1024 ** 3
     limit_str = f"{limit / gib:.1f}Gi" if limit else "unlimited"
+    stop = threading.Event()
 
     def poll():
         peak = 0
-        while True:
+        while not stop.is_set():
             cur = read("memory.current") or read("memory.usage_in_bytes") or 0
             peak = max(peak, cur)
             pct = f" ({100 * cur / limit:.0f}% of limit)" if limit else ""
             print(f"[mem] {cur / gib:.1f}Gi in use, peak {peak / gib:.1f}Gi, "
                   f"limit {limit_str}{pct}", flush=True)
-            time.sleep(interval)
+            stop.wait(interval)  # wake immediately on stop instead of sleeping out the interval
 
     threading.Thread(target=poll, daemon=True).start()
+    return stop.set  # call to stop logging (it's a daemon, so this is just to quiet the log)
+
+
+def run_subprocess_timeout(cmd, timeout):
+    """Run `cmd` with a hard wall-clock cap; return its exit code, or "timeout".
+    """
+    proc = subprocess.Popen(cmd, start_new_session=True)
+    try:
+        return proc.wait(timeout=timeout or None)
+    except subprocess.TimeoutExpired:
+        # Kill the group; escalate to the process itself if it somehow outlives it.
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+        proc.wait()
+        return "timeout"
 
 
 def local_lsdir_recursive(root_dir):
@@ -112,7 +130,8 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video=True, video_config="", reannotate=False, reannotate_config="",
                 reannotated_dir="", reannotate_timeout=None, domain_queue=None,
-                stager=None, data_dir=None, local_out_dir="", converter_workers=0):
+                stager=None, data_dir=None, local_out_dir="", converter_workers=0,
+                converter_timeout=0):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     # When local_out_dir is set the converted dataset is written to a known,
     # persistent location (<local_out_dir>/<relpath>) that the caller can read
@@ -187,9 +206,15 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         if converter_extra_args:
             cmd.extend(converter_extra_args.split())
 
-        proc = subprocess.run(cmd)
-        if proc.returncode != 0:
-            return relpath, False, f"conversion exited with code {proc.returncode}"
+        # Hard timeout on the converter. Its internal multiprocessing.Pool can spin
+        # forever if a worker is OOM-killed (main thread pegs one core, workers turn
+        # into zombies)
+        rc = run_subprocess_timeout(cmd, converter_timeout)
+        if rc == "timeout":
+            return relpath, False, (f"conversion exceeded converter_timeout "
+                                    f"({converter_timeout}s) -- killed")
+        if rc != 0:
+            return relpath, False, f"conversion exited with code {rc}"
 
         dst_relpath = os.path.join(dst_dir, relpath)
         if stager:
@@ -224,6 +249,7 @@ def parse_args():
     parser.add_argument("--num_conversion_workers", type=int, default=None, help="bags to convert at once; overrides pipeline.num_conversion_workers")
     parser.add_argument("--max_total_converter_workers", type=int, default=None, help="cap on converter pool workers across all bags; overrides pipeline.max_total_converter_workers (0 = use the cpu budget)")
     parser.add_argument("--converter_extra_args", default=None, help="extra args passed through to the converter; overrides pipeline.converter_extra_args")
+    parser.add_argument("--converter_timeout", type=float, default=None, help="hard wall-clock cap (s) on each bag's converter; on timeout the bag fails and the batch continues. 0 = no cap. Overrides pipeline.converter_timeout")
     return parser.parse_args()
 
 
@@ -246,6 +272,9 @@ def main():
     num_conversion_workers = int(pick(args.num_conversion_workers,
                                       pcfg.get("num_conversion_workers", 4),
                                       "num_conversion_workers"))
+    converter_timeout = float(pick(args.converter_timeout,
+                                   pcfg.get("converter_timeout", 0) or 0,
+                                   "converter_timeout") or 0)
     converter_extra_args = pick(args.converter_extra_args,
                                 pcfg.get("converter_extra_args", "") or "",
                                 "converter_extra_args") or ""
@@ -268,7 +297,7 @@ def main():
     # torch/OpenCV with no copy-on-write sharing. Budgeting on CPU alone pins the
     # *total* worker count at ~cpu_budget however few bags run at once, so
     # max_total_converter_workers is the knob that actually lowers peak memory.
-    start_memory_logger()
+    stop_memory_logger = start_memory_logger()
 
     cpu_budget = available_cpus()
     max_total = int(pick(args.max_total_converter_workers,
@@ -329,6 +358,7 @@ def main():
                     reannotate, reannotate_config, reannotated_dir,
                     reannotate_timeout, domain_queue,
                     stager, args.data_dir, args.local_out_dir, converter_workers,
+                    converter_timeout,
                 ): relpath
                 for relpath in pending
             }
@@ -343,6 +373,8 @@ def main():
 
     if manager is not None:
         manager.shutdown()
+
+    stop_memory_logger()  # quiet the [mem] heartbeat now that all work is done
 
     print(
         f"[summary] found={len(run_dirs)} pending={len(pending)} "

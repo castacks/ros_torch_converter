@@ -4,6 +4,7 @@ import argparse
 import copy
 import time
 from datetime import timedelta
+import multiprocessing
 from multiprocessing import Pool, Manager, set_start_method
 from threading import Thread
 import sys
@@ -628,7 +629,8 @@ if __name__ == '__main__':
         try:
             async_result = pool.map_async(process_cvt_entry_wrapper, process_args)
             results = async_result.get(timeout=7200)  # 2 hour timeout
-        except TimeoutError:
+            # multiprocessing raises multiprocessing.TimeoutError here, which is NOT a
+        except multiprocessing.TimeoutError:
             print("\nERROR: Processing timed out after 2 hours")
             pool.terminate()
             pool.join()
