@@ -7,6 +7,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
@@ -29,6 +31,40 @@ def resolve_config_path(path):
     if os.path.isabs(path):
         return path
     return os.path.join(CONVERTER_PACKAGE_DIR, path)
+
+
+def start_memory_logger(interval=60.0):
+    """Log cgroup memory use periodically, as a daemon thread.
+    """
+    def read(name):
+        for base in ("/sys/fs/cgroup", "/sys/fs/cgroup/memory"):
+            try:
+                with open(os.path.join(base, name)) as f:
+                    return int(f.read().split()[0])
+            except (OSError, ValueError):
+                continue
+        return None
+
+    # cgroup v2 names first, then v1 equivalents.
+    limit = read("memory.max") or read("memory.limit_in_bytes")
+    if read("memory.current") is None and read("memory.usage_in_bytes") is None:
+        print("[mem] cgroup memory stats unavailable -- skipping memory logging")
+        return
+
+    gib = 1024 ** 3
+    limit_str = f"{limit / gib:.1f}Gi" if limit else "unlimited"
+
+    def poll():
+        peak = 0
+        while True:
+            cur = read("memory.current") or read("memory.usage_in_bytes") or 0
+            peak = max(peak, cur)
+            pct = f" ({100 * cur / limit:.0f}% of limit)" if limit else ""
+            print(f"[mem] {cur / gib:.1f}Gi in use, peak {peak / gib:.1f}Gi, "
+                  f"limit {limit_str}{pct}", flush=True)
+            time.sleep(interval)
+
+    threading.Thread(target=poll, daemon=True).start()
 
 
 def local_lsdir_recursive(root_dir):
@@ -209,12 +245,27 @@ def main():
     else:
         exclude_subdirs = {s.strip() for s in exclude_subdirs_raw.split(",") if s.strip()}
 
-    # Share the pod's CPU budget across the bags in flight rather than letting each
+    # Share the worker budget across the bags in flight rather than letting each
     # converter claim all of it (see convert_one).
+    #
+    # The binding constraint is usually memory, not CPU: the converter's pool uses the
+    # 'spawn' start method, so every pool worker is a fresh interpreter re-importing
+    # torch/OpenCV with no copy-on-write sharing. Budgeting on CPU alone pins the
+    # *total* worker count at ~cpu_budget however few bags run at once, so
+    # max_total_converter_workers is the knob that actually lowers peak memory.
+    start_memory_logger()
+
     cpu_budget = available_cpus()
-    converter_workers = max(1, cpu_budget // max(1, num_conversion_workers))
-    print(f"[cpu] budget {cpu_budget} cpus / {num_conversion_workers} concurrent bag(s) "
-          f"-> --num_workers {converter_workers} per conversion")
+    max_total = int(pcfg.get("max_total_converter_workers", 0) or 0)
+    worker_budget = min(cpu_budget, max_total) if max_total > 0 else cpu_budget
+    converter_workers = max(1, worker_budget // max(1, num_conversion_workers))
+    if "--num_workers" in converter_extra_args:
+        print(f"[cpu] budget {cpu_budget} cpus; --num_workers pinned by "
+              f"converter_extra_args ({converter_extra_args.strip()})")
+    else:
+        print(f"[cpu] budget {cpu_budget} cpus, worker budget {worker_budget} / "
+              f"{num_conversion_workers} concurrent bag(s) -> --num_workers "
+              f"{converter_workers} each ({converter_workers * num_conversion_workers} total)")
 
     scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
