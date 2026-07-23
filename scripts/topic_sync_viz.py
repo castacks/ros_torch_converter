@@ -82,6 +82,8 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
     interp_tol = config["interp_tol"]
     backward_interpolation = config["backward_interpolation"]
     topics = sorted({t["topic"] for t in config["topics"]})
+    topic_optional = {t["topic"]: t.get("optional", False) for t in config["topics"]}
+    required_topics = [t for t in topics if not topic_optional[t]]
 
     queue, msg_times = compute_sync(bag_dir, topics, dt, backward_interpolation,
                                      use_bag_time=use_bag_time)
@@ -92,6 +94,8 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
                              sharex=True, gridspec_kw={"height_ratios": height_ratios})
     raster_ax, strip_ax = axes[0], axes[1]
     gap_ax = axes[2] if gap_panel else None
+
+    raster_ax.set_ylim(-0.5, len(topics) - 0.5)
 
     for i, topic in enumerate(topics):
         times = msg_times[topic]
@@ -110,10 +114,12 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
     raster_ax.set_yticklabels(topics, fontsize=7)
     raster_ax.set_title(f"Topic sync / dropout raster (dt={dt}, interp_tol={interp_tol})")
 
-    # Validity strip: slots where every topic is within interp_tol (all_valid_mask's
-    # interp_tol half only, not its TF-range gating -- see module docstring).
+    # Validity strip: slots where every *required* (non-optional) topic is within
+    # interp_tol (all_valid_mask's interp_tol half only, not its TF-range gating --
+    # see module docstring). Optional topics are excluded so sparse/event-driven
+    # topics (e.g. planner output) don't drag the whole bag's validity down.
     all_valid = np.ones(len(target_times), dtype=bool)
-    for topic in topics:
+    for topic in required_topics:
         all_valid &= queue["topic_error"][topic] < interp_tol
     for start, end in _consecutive_spans(target_times[~all_valid], dt):
         strip_ax.axvspan(start, end, color="orange", alpha=0.6)
