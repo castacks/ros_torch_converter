@@ -25,7 +25,6 @@
     num_conversion_workers: 5
     exclude_subdirs: ''        # comma-separated names to skip, or '' / 'none' for all
     converter_extra_args: ''
-    scratch_dir: /var/tmp/osmo_pipeline
     render_video: true
     video_config: config/video/thermal_pip.yaml
     # Reannotate bags missing super_odometry before converting; needs gpu >= 1 cause of roughness!

@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
 
-from tartandriver_utils.os_utils import is_kitti_dir, is_rosbag_dir_filenames, load_yaml
+from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, is_rosbag_dir_filenames, load_yaml
 from tartandriver_utils.rclone_stager import RcloneStager
 
 from headless_bag_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
@@ -29,46 +29,6 @@ def resolve_config_path(path):
     if os.path.isabs(path):
         return path
     return os.path.join(CONVERTER_PACKAGE_DIR, path)
-
-
-def describe_mount(path):
-    """Backing mountpoint, filesystem type and free space for `path`.
-    """
-    real = os.path.realpath(path)
-    best = ("", "")
-    try:
-        with open("/proc/mounts") as f:
-            for line in f:
-                fields = line.split()
-                if len(fields) < 3:
-                    continue
-                mountpoint, fstype = fields[1], fields[2]
-                # Longest matching mountpoint prefix is the one actually backing `real`.
-                if (real == mountpoint or real.startswith(mountpoint.rstrip("/") + "/")) \
-                        and len(mountpoint) >= len(best[0]):
-                    best = (mountpoint, fstype)
-    except OSError:
-        pass
-
-    st = os.statvfs(real)
-    free_gb = st.f_bavail * st.f_frsize / 1024 ** 3
-    total_gb = st.f_blocks * st.f_frsize / 1024 ** 3
-    mountpoint, fstype = best or ("?", "?")
-    return f"{real} (mount={mountpoint or '?'} fstype={fstype or '?'} " \
-           f"free={free_gb:.1f}Gi/{total_gb:.1f}Gi)"
-
-
-def resolve_scratch_dir(scratch_dir):
-    """Pick the base dir for all staging tempdirs, and make `tempfile` honour it.
-    """
-    if not scratch_dir:
-        return tempfile.gettempdir()
-
-    resolved = os.path.abspath(os.path.expanduser(os.path.expandvars(scratch_dir)))
-    os.makedirs(resolved, exist_ok=True)
-    tempfile.tempdir = resolved
-    os.environ["TMPDIR"] = resolved
-    return resolved
 
 
 def local_lsdir_recursive(root_dir):
@@ -116,7 +76,7 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video=True, video_config="", reannotate=False, reannotate_config="",
                 reannotated_dir="", reannotate_timeout=None, domain_queue=None,
-                stager=None, data_dir=None, local_out_dir=""):
+                stager=None, data_dir=None, local_out_dir="", converter_workers=0):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     # When local_out_dir is set the converted dataset is written to a known,
     # persistent location (<local_out_dir>/<relpath>) that the caller can read
@@ -183,6 +143,11 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             cmd.append("--no_render_video")
         elif video_config:
             cmd.extend(["--video_config", resolve_config_path(video_config)])
+        # Each converter sizes its own pool off the whole CPU budget, so N bags in
+        # flight would together spawn N x that many frame-buffering workers. Split
+        # the budget instead. An explicit --num_workers in converter_extra_args wins.
+        if converter_workers and "--num_workers" not in converter_extra_args:
+            cmd.extend(["--num_workers", str(converter_workers)])
         if converter_extra_args:
             cmd.extend(converter_extra_args.split())
 
@@ -220,7 +185,6 @@ def parse_args():
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
     parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally")
-    parser.add_argument("--scratch_dir", default="", help="base dir for all staging tempdirs (raw bag, reannotation, KITTI); overrides pipeline.scratch_dir. Empty uses $TMPDIR, else /tmp")
     return parser.parse_args()
 
 
@@ -234,7 +198,6 @@ def main():
 
     num_conversion_workers = int(pcfg.get("num_conversion_workers", 4))
     converter_extra_args = pcfg.get("converter_extra_args", "") or ""
-    scratch_dir = args.scratch_dir or pcfg.get("scratch_dir", "") or ""
     render_video = bool(pcfg.get("render_video", True))
     video_config = pcfg.get("video_config", "") or ""
     reannotate = bool(pcfg.get("reannotate", False))
@@ -246,8 +209,12 @@ def main():
     else:
         exclude_subdirs = {s.strip() for s in exclude_subdirs_raw.split(",") if s.strip()}
 
-    resolved_scratch = resolve_scratch_dir(scratch_dir)
-    print(f"[scratch] staging bags under {describe_mount(resolved_scratch)}")
+    # Share the pod's CPU budget across the bags in flight rather than letting each
+    # converter claim all of it (see convert_one).
+    cpu_budget = available_cpus()
+    converter_workers = max(1, cpu_budget // max(1, num_conversion_workers))
+    print(f"[cpu] budget {cpu_budget} cpus / {num_conversion_workers} concurrent bag(s) "
+          f"-> --num_workers {converter_workers} per conversion")
 
     scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
@@ -293,7 +260,7 @@ def main():
                     render_video, video_config,
                     reannotate, reannotate_config, reannotated_dir,
                     reannotate_timeout, domain_queue,
-                    stager, args.data_dir, args.local_out_dir,
+                    stager, args.data_dir, args.local_out_dir, converter_workers,
                 ): relpath
                 for relpath in pending
             }

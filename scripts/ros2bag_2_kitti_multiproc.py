@@ -4,7 +4,7 @@ import argparse
 import copy
 import time
 from datetime import timedelta
-from multiprocessing import Pool, cpu_count, Manager, set_start_method
+from multiprocessing import Pool, Manager, set_start_method
 from threading import Thread
 import sys
 
@@ -18,7 +18,7 @@ from rosbags.highlevel import AnyReader
 from rosbags.typesys import Stores, get_typestore
 
 from tartandriver_utils.ros_utils import stamp_to_time
-from tartandriver_utils.os_utils import load_yaml
+from tartandriver_utils.os_utils import available_cpus, load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
 from ros_torch_converter.tf_manager import TfManager
@@ -608,16 +608,17 @@ if __name__ == '__main__':
             process_args.append((bagpath, ckey, cinfo, args, topic_times_full, camera_info_torch, n_frames, is_interp, 0, 0, progress_queue))
 
     total_workers_needed = sum(shard_counts.values())
+    cpu_budget = available_cpus()
     if args.num_workers is None:
-        num_workers = min(total_workers_needed, cpu_count())
+        num_workers = min(total_workers_needed, cpu_budget)
     elif args.num_workers == "max":
-        num_workers = cpu_count()
+        num_workers = cpu_budget
     else:
-        num_workers = min(cpu_count(), int(args.num_workers))
+        num_workers = min(cpu_budget, int(args.num_workers))
 
     tokitti_start = time.time()
     print('\n4. Converting to KITTI')
-    print(f"\nProcessing {total_workers_needed} workers ({len(filt_cvt_info)} topics) in parallel using {num_workers} pool workers...\n")
+    print(f"\nProcessing {total_workers_needed} workers ({len(filt_cvt_info)} topics) in parallel using {num_workers} pool workers (cpu budget {cpu_budget})...\n")
 
     monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, sorted(filt_cvt_info.keys()), shard_counts, args.src_dir, args.color))
     monitor_thread.daemon = True
