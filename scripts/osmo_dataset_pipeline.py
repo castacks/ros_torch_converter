@@ -221,7 +221,18 @@ def parse_args():
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
     parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally")
+    parser.add_argument("--num_conversion_workers", type=int, default=None, help="bags to convert at once; overrides pipeline.num_conversion_workers")
+    parser.add_argument("--max_total_converter_workers", type=int, default=None, help="cap on converter pool workers across all bags; overrides pipeline.max_total_converter_workers (0 = use the cpu budget)")
+    parser.add_argument("--converter_extra_args", default=None, help="extra args passed through to the converter; overrides pipeline.converter_extra_args")
     return parser.parse_args()
+
+
+def pick(cli_value, cfg_value, name):
+    """CLI (env-driven) value if given, else the pipeline-config value."""
+    if cli_value is None:
+        return cfg_value
+    print(f"[config] {name}={cli_value} (overriding pipeline config value {cfg_value!r})")
+    return cli_value
 
 
 def main():
@@ -232,8 +243,12 @@ def main():
     cfg = load_yaml(resolve_config_path(args.pipeline_config))
     pcfg = cfg.get("pipeline", {}) or {}
 
-    num_conversion_workers = int(pcfg.get("num_conversion_workers", 4))
-    converter_extra_args = pcfg.get("converter_extra_args", "") or ""
+    num_conversion_workers = int(pick(args.num_conversion_workers,
+                                      pcfg.get("num_conversion_workers", 4),
+                                      "num_conversion_workers"))
+    converter_extra_args = pick(args.converter_extra_args,
+                                pcfg.get("converter_extra_args", "") or "",
+                                "converter_extra_args") or ""
     render_video = bool(pcfg.get("render_video", True))
     video_config = pcfg.get("video_config", "") or ""
     reannotate = bool(pcfg.get("reannotate", False))
@@ -256,7 +271,9 @@ def main():
     start_memory_logger()
 
     cpu_budget = available_cpus()
-    max_total = int(pcfg.get("max_total_converter_workers", 0) or 0)
+    max_total = int(pick(args.max_total_converter_workers,
+                         pcfg.get("max_total_converter_workers", 0) or 0,
+                         "max_total_converter_workers") or 0)
     worker_budget = min(cpu_budget, max_total) if max_total > 0 else cpu_budget
     converter_workers = max(1, worker_budget // max(1, num_conversion_workers))
     if "--num_workers" in converter_extra_args:
