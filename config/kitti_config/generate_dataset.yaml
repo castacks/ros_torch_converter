@@ -22,7 +22,7 @@
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/thermal_topics.yaml
 
   pipeline:
-    num_conversion_workers: 10
+    num_conversion_workers: 2
     exclude_subdirs: ''        # comma-separated names to skip, or '' / 'none' for all
     converter_extra_args: ''
     render_video: true

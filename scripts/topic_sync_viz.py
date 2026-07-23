@@ -75,6 +75,12 @@ def _consecutive_spans(times, dt, gap_factor=1.5):
     return spans
 
 
+def _short_topic(topic):
+    """Last two path components of a topic, for compact per-panel y-labels."""
+    parts = [p for p in topic.split("/") if p]
+    return "/".join(parts[-2:]) if len(parts) > 1 else topic
+
+
 def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_bag_time=False):
     """Render the sync/dropout figure for `bag_dir` to `out_png`. Returns `out_png`."""
     config = load_yaml(pipeline_config_path)
@@ -89,35 +95,16 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
                                      use_bag_time=use_bag_time)
     target_times = queue["target_times"]
 
-    height_ratios = [max(len(topics), 3), 0.6] + ([3] if gap_panel else [])
-    fig, axes = plt.subplots(len(height_ratios), 1, figsize=(14, sum(height_ratios) * 0.6),
-                             sharex=True, gridspec_kw={"height_ratios": height_ratios})
-    raster_ax, strip_ax = axes[0], axes[1]
-    gap_ax = axes[2] if gap_panel else None
+    height_ratios = [0.8] + ([1.4] * len(topics) if gap_panel else [])
+    fig, axes = plt.subplots(len(height_ratios), 1, figsize=(14, sum(height_ratios) * 0.9),
+                             sharex=True, squeeze=False,
+                             gridspec_kw={"height_ratios": height_ratios})
+    axes = axes[:, 0]
+    strip_ax = axes[0]
+    gap_axes = dict(zip(topics, axes[1:])) if gap_panel else {}
 
-    raster_ax.set_ylim(-0.5, len(topics) - 0.5)
+    fig.suptitle(f"Topic sync / dropout (dt={dt}, interp_tol={interp_tol})")
 
-    for i, topic in enumerate(topics):
-        times = msg_times[topic]
-        raster_ax.eventplot([times], lineoffsets=i, linelengths=0.8, colors="black")
-
-        # Slots where this topic misses interp_tol -- frames it makes the converter drop.
-        err = queue["topic_error"][topic]
-        bad = err >= interp_tol
-        for start, end in _consecutive_spans(target_times[bad], dt):
-            raster_ax.axvspan(start, end, ymin=i / len(topics), ymax=(i + 1) / len(topics),
-                              color="red", alpha=0.4)
-            raster_ax.annotate(f"t={start:.2f}s (+{end - start:.2f}s)",
-                               xy=(start, i + 0.35), fontsize=6, color="red")
-
-    raster_ax.set_yticks(range(len(topics)))
-    raster_ax.set_yticklabels(topics, fontsize=7)
-    raster_ax.set_title(f"Topic sync / dropout raster (dt={dt}, interp_tol={interp_tol})")
-
-    # Validity strip: slots where every *required* (non-optional) topic is within
-    # interp_tol (all_valid_mask's interp_tol half only, not its TF-range gating --
-    # see module docstring). Optional topics are excluded so sparse/event-driven
-    # topics (e.g. planner output) don't drag the whole bag's validity down.
     all_valid = np.ones(len(target_times), dtype=bool)
     for topic in required_topics:
         all_valid &= queue["topic_error"][topic] < interp_tol
@@ -126,16 +113,29 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
     strip_ax.set_yticks([])
     strip_ax.set_ylabel("frame\nvalidity", fontsize=7, rotation=0, labelpad=25, va="center")
 
-    if gap_panel:
-        for topic in topics:
-            times = msg_times[topic]
-            if len(times) < 2:
-                continue
+    for topic, gap_ax in gap_axes.items():
+        times = msg_times[topic]
+        if len(times) >= 2:
             gap_ax.plot(times[1:], np.diff(times), marker=".", markersize=2,
-                       linewidth=0.5, label=topic)
-        gap_ax.set_ylabel("inter-arrival\ngap (s)", fontsize=7)
-        gap_ax.legend(fontsize=6, ncol=3)
-        gap_ax.grid(True, alpha=0.3)
+                        linewidth=0.5, color="tab:blue")
+        # dt reference line: gaps above it can't fill every grid slot.
+        gap_ax.axhline(dt, color="grey", linestyle="--", linewidth=0.5)
+
+        # Slots where this topic misses interp_tol -- frames it makes the converter
+        bad = queue["topic_error"][topic] >= interp_tol
+        for start, end in _consecutive_spans(target_times[bad], dt):
+            gap_ax.axvspan(start, end, color="red", alpha=0.15)
+
+        label = _short_topic(topic) + ("\n(optional)" if topic_optional[topic] else "")
+        gap_ax.set_ylabel(label, fontsize=6, rotation=0, labelpad=32, va="center", ha="right")
+        # Log scale: one multi-second dropout otherwise squashes the nominal
+        gap_ax.set_yscale("log")
+        gap_ax.tick_params(axis="y", labelsize=5)
+        gap_ax.grid(True, alpha=0.3, which="both")
+
+    if gap_axes:
+        axes[1].set_title("Inter-arrival gap (s) per topic; grey dash = dt, "
+                          "red = slots missing interp_tol", fontsize=8)
 
     axes[-1].set_xlabel("time (s)")
     fig.tight_layout()
@@ -152,7 +152,8 @@ def parse_args():
                         help="ros_torch_converter config yaml (same one passed to the KITTI "
                              "converter) -- supplies dt/interp_tol/backward_interpolation/topics")
     parser.add_argument("--out", required=True, help="output PNG path")
-    parser.add_argument("--no_gap_panel", action="store_true", help="skip the inter-arrival gap panel")
+    parser.add_argument("--no_gap_panel", action="store_true",
+                        help="skip the per-topic inter-arrival gap panels")
     parser.add_argument("--use_bag_time", action="store_true",
                         help="match on bag receive time instead of header.stamp")
     return parser.parse_args()
