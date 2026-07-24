@@ -95,11 +95,13 @@ def process_depth(idx, dataset_path, config, tf_manager, projector, image_data, 
         T_sensor2cam_chain = T_vehicle2cam @ T_point2vehicle
 
     intrinsics = config['intrinsics'][0]
+    R = np.array(config['R'], dtype=float) if config['rectified_img'] else None
+    distortion = None if config['rectified_img'] else config['distortion']
 
     if config['use_chain']:
-        depth_map = projector.project_lidar_to_image(slam_points, intrinsics, T_sensor2cam_chain)
+        depth_map = projector.project_lidar_to_image(slam_points, intrinsics, R, distortion, T_sensor2cam_chain)
     else:
-        depth_map = projector.project_lidar_to_image(slam_points, intrinsics, T_sensor2cam)
+        depth_map = projector.project_lidar_to_image(slam_points, intrinsics, R, distortion, T_sensor2cam)
 
     if verbose:
         print(f"Depth max: {depth_map.max()}, min: {depth_map.min()}, mean: {depth_map.mean()}")
@@ -223,7 +225,7 @@ def process_single_config(config, args, tf_manager):
 
             depth_map = None
             if extract_depth:
-                depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, verbose=args.verbose, viz=args.viz)
+                depth_map = process_depth(idx, args.dataset, config, tf_manager, projector, image_data, verbose=args.verbose, viz=args.viz_all)
                 if vehicle_mask is not None and depth_map is not None:
                     depth_map[vehicle_mask == 1] = 0
                 if depth_map is not None:
@@ -237,7 +239,7 @@ def process_single_config(config, args, tf_manager):
                 if cam_7d is not None:
                     camera_poses.append(cam_7d)
 
-            if args.viz and depth_map is not None:
+            if args.viz_all and depth_map is not None:
                 img = image_to_viz(image_data)
                 depth_viz = projector.visualize_depth(depth_map)
                 plt.figure(figsize=(15, 5))
@@ -259,7 +261,7 @@ def process_single_config(config, args, tf_manager):
         if extract_odom and len(camera_poses) > 0:
             save_poses_to_file(camera_poses, debug_dir)
             saved_outputs.append(os.path.join(debug_dir, "data.txt"))
-            if is_range and args.viz:
+            if is_range and (args.viz_all or args.viz_traj):
                 print(f"[{config_name}] Visualizing {len(camera_poses)} camera poses "
                       f"over idx {debug_indices[0]}..{debug_indices[-1]}")
                 visualize_trajectories([], camera_poses, config)
@@ -287,7 +289,7 @@ def process_single_config(config, args, tf_manager):
         odom_poses = []
         camera_poses = []
 
-        if args.viz and extract_odom:
+        if (args.viz_all or args.viz_traj) and extract_odom:
             odom_data_file = os.path.join(args.dataset, ODOM_GROUP, "odometry", "data.txt")
             if os.path.exists(odom_data_file):
                 odom_all = np.loadtxt(odom_data_file).reshape(-1, 13)[:, :7]
@@ -318,14 +320,14 @@ def process_single_config(config, args, tf_manager):
                     ts_list[idx] = image_data.stamp
                     successful_odom += 1
 
-                    if args.viz:
+                    if args.viz_all or args.viz_traj:
                         camera_poses.append(cam_7d)
 
         if extract_odom:
             save_poses_to_file(pose_list, pose_save_dir)
             save_timestamps_to_file(ts_list, pose_save_dir)
 
-        if args.viz and len(camera_poses) > 0:
+        if (args.viz_all or args.viz_traj) and len(camera_poses) > 0:
             print(f"Showing visualization with {len(camera_poses)} camera poses, {len(odom_poses)} odom poses...")
             visualize_trajectories(odom_poses, camera_poses, config)
 
@@ -390,7 +392,8 @@ if __name__ == "__main__":
                        help="Frame index/indices to debug. One value debugs a single frame; "
                             "two values [start end] debug an inclusive range and visualize the odom trajectory.")
     parser.add_argument("--verbose", action="store_true", help="Verbose per-frame printouts")
-    parser.add_argument("--viz", action="store_true", help="Show visualizations (depth plots, trajectory viewer)")
+    parser.add_argument("--viz_all", action="store_true", help="Show all visualizations (depth plots, trajectory viewer)")
+    parser.add_argument("--viz_traj", action="store_true", help="Show only trajectory visualizations")
 
     args = parser.parse_args()
     main(args)

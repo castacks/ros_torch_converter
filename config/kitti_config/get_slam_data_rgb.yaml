@@ -6,6 +6,13 @@ mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_
 
 intrinsics: #fx,fy,cx,cy
   - [455.7750, 456.3191, 497.1180, 251.8580]
+rectified_img: true
+R:
+  - [0.9999926686286926, -0.001692004851065576, 0.003427336923778057]
+  - [0.0016923071816563606, 0.9999985694885254, -8.531315688742325e-05]
+  - [-0.003427187679335475, 9.11126408027485e-05, 0.9999940991401672]
+distortion:
+  - [-0.03597196191549301, 0.08101943135261536, -0.00028405245393514633, 0.0011874435003846884]
 pointcloud_frame: sensor_init
 camera_frame: multisense/left_camera_optical_frame
 odometry_frame: sensor_init

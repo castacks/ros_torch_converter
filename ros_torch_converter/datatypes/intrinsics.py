@@ -115,18 +115,19 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     to_rosmsg_type = CameraInfo
     from_rosmsg_type = CameraInfo
     time_spec = TimeSpec.STATIC
+    cam_dtype = torch.float64
 
     def __init__(self, device='cpu'):
         super().__init__()
         self.device = device
         # Camera intrinsic matrix K (3x3)
-        self.k = torch.zeros(3, 3, device=device)
+        self.k = torch.zeros(3, 3, device=device, dtype=CameraInfoTorch.cam_dtype)
         # Distortion coefficients D (variable length)
-        self.d = torch.zeros(0, device=device)
+        self.d = torch.zeros(0, device=device, dtype=CameraInfoTorch.cam_dtype)
         # Rectification matrix R (3x3)
-        self.r = torch.eye(3, device=device)
+        self.r = torch.eye(3, device=device, dtype=CameraInfoTorch.cam_dtype)
         # Projection matrix P (3x4)
-        self.p = torch.zeros(3, 4, device=device)
+        self.p = torch.zeros(3, 4, device=device, dtype=CameraInfoTorch.cam_dtype)
         # Distortion model name
         self.distortion_model = ""
         # Image dimensions
@@ -135,15 +136,37 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = CameraInfoTorch(device=device)
-        res.k = torch.tensor(msg.k, device=device, dtype=torch.float32).reshape(3, 3)
-        res.d = torch.tensor(msg.d, device=device, dtype=torch.float32)
-        res.r = torch.tensor(msg.r, device=device, dtype=torch.float32).reshape(3, 3)
-        res.p = torch.tensor(msg.p, device=device, dtype=torch.float32).reshape(3, 4)
+        res.k = torch.tensor(msg.k, device=device, dtype=CameraInfoTorch.cam_dtype).reshape(3, 3)
+        res.d = torch.tensor(msg.d, device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.r = torch.tensor(msg.r, device=device, dtype=CameraInfoTorch.cam_dtype).reshape(3, 3)
+        res.p = torch.tensor(msg.p, device=device, dtype=CameraInfoTorch.cam_dtype).reshape(3, 4)
         res.distortion_model = msg.distortion_model
         res.width = msg.width
         res.height = msg.height
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
+        return res
+    
+    def from_torch(k, d, r, p, distortion_model, width, height):
+        res = CameraInfoTorch(device=k.device)
+        res.k = k.double()
+        res.d = d.double()
+        res.r = r.double()
+        res.p = p.double()
+        res.distortion_model = distortion_model
+        res.width = width
+        res.height = height
+        return res
+
+    def from_numpy(k, d, r, p, distortion_model, width, height, device):
+        res = CameraInfoTorch(device=device)
+        res.k = torch.from_numpy(k).to(device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.d = torch.from_numpy(d).to(device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.r = torch.from_numpy(r).to(device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.p = torch.from_numpy(p).to(device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.distortion_model = distortion_model
+        res.width = width
+        res.height = height
         return res
 
     def to_rosmsg(self):
@@ -182,14 +205,14 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     def from_kitti(base_dir, idx, device='cpu'):
         res = CameraInfoTorch(device=device)
 
-        fp = os.path.join(base_dir, "data.yaml".format(idx))
+        fp = os.path.join(base_dir, "data.yaml")
         with open(fp, 'r') as f:
             data = yaml.safe_load(f)
 
-        res.k = torch.tensor(data['k'], device=device, dtype=torch.float32)
-        res.d = torch.tensor(data['d'], device=device, dtype=torch.float32)
-        res.r = torch.tensor(data['r'], device=device, dtype=torch.float32)
-        res.p = torch.tensor(data['p'], device=device, dtype=torch.float32)
+        res.k = torch.tensor(data['k'], device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.d = torch.tensor(data['d'], device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.r = torch.tensor(data['r'], device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.p = torch.tensor(data['p'], device=device, dtype=CameraInfoTorch.cam_dtype)
         res.distortion_model = data['distortion_model']
         res.width = data['width']
         res.height = data['height']
@@ -210,14 +233,14 @@ class CameraInfoTorch(TorchCoordinatorDataType):
     def rand_init(device='cpu'):
         res = CameraInfoTorch(device=device)
         # Random intrinsics
-        res.k = torch.eye(3, device=device)
-        res.k[[0, 1, 0, 1], [0, 1, 2, 2]] = torch.rand(size=(4,), device=device) * 100.
+        res.k = torch.eye(3, device=device, dtype=CameraInfoTorch.cam_dtype)
+        res.k[[0, 1, 0, 1], [0, 1, 2, 2]] = torch.rand(size=(4,), device=device, dtype=CameraInfoTorch.cam_dtype) * 100.
         # Random distortion (5 coefficients for plumb_bob)
-        res.d = torch.randn(5, device=device) * 0.1
+        res.d = torch.randn(5, device=device, dtype=CameraInfoTorch.cam_dtype) * 0.1
         # Identity rectification
-        res.r = torch.eye(3, device=device)
+        res.r = torch.eye(3, device=device, dtype=CameraInfoTorch.cam_dtype)
         # Random projection
-        res.p = torch.zeros(3, 4, device=device)
+        res.p = torch.zeros(3, 4, device=device, dtype=CameraInfoTorch.cam_dtype)
         res.p[:3, :3] = res.k
         res.distortion_model = 'plumb_bob'
         res.width = 640

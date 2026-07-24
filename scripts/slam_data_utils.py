@@ -87,13 +87,15 @@ class LidarProjector:
             raise ValueError(f"Unrecognized calibration format in {calib}. Rewrite load_calibration() to handle this format.")
     
     
-    def project_lidar_to_image(self, lidar_points, intrinsics, T_lidar2cam=None):
+    def project_lidar_to_image(self, lidar_points, intrinsics, R=None, distortion=None, T_lidar2cam=None):
         """
         Project LiDAR points onto an image.
         
         Args:
             lidar_points: Nx4 or Nx3 numpy array of LiDAR points
             intrinsics: Camera intrinsics as [fx, fy, cx, cy]
+            R: 3x3 rotation matrix mapping raw camera frame to rectified camera frame
+            distortion: Distortion coefficients as [k1, k2, r1, r2]
             T_lidar2cam: 4x4 transformation matrix from LiDAR to camera
             
         Returns:
@@ -107,6 +109,10 @@ class LidarProjector:
         points_homogeneous = np.hstack((points_xyz, np.ones((points_xyz.shape[0], 1))))
         
         points_cam = (T_lidar2cam @ points_homogeneous.T).T
+
+        if R is not None:
+            # Rotate points to rectified camera frame
+            points_cam = (R @ points_cam[:, :-1].T).T
         
         X = points_cam[:, 0]
         Y = points_cam[:, 1]
@@ -131,11 +137,20 @@ class LidarProjector:
                       [0.0, fy, cy],
                       [0.0, 0.0, 1.0]])
 
-        # Project to 2D image
-        uv_homogeneous = K @ np.vstack((X, Y, Z))
-        u = uv_homogeneous[0] / uv_homogeneous[2]
-        v = uv_homogeneous[1] / uv_homogeneous[2]
-        
+        if distortion is None:
+            # Project to 2D image
+            uv_homogeneous = K @ np.vstack((X, Y, Z))
+            u = uv_homogeneous[0] / uv_homogeneous[2]
+            v = uv_homogeneous[1] / uv_homogeneous[2]
+        else:
+            rvec = np.zeros((3,1), dtype=np.float32)
+            tvec = np.zeros((3,1), dtype=np.float32)
+            # project points, accounting for image distortion
+            image_points, _ = cv2.projectPoints(np.vstack((X, Y, Z)), rvec, tvec, K, distortion)
+            pts = image_points.reshape(-1, 2)
+            u = pts[:, 0]
+            v = pts[:, 1]
+
         valid_bounds = (u >= 0) & (u < self.img_width) & (v >= 0) & (v < self.img_height)
         u = u[valid_bounds]
         v = v[valid_bounds] 
@@ -156,7 +171,7 @@ class LidarProjector:
         
         return depth_map
     
-    def project_and_merge_multiple_scans(self, lidar_paths, intrinsics, T_lidar2cam=None, filter_points=True):
+    def project_and_merge_multiple_scans(self, lidar_paths, intrinsics, R=None, distortion=None, T_lidar2cam=None, filter_points=True):
         """
         Project multiple LiDAR scans and merge them into a single depth map.
         
@@ -174,7 +189,7 @@ class LidarProjector:
         for lidar_path in lidar_paths:
             lidar_points = self.load_lidar(lidar_path)
             
-            depth_map = self.project_lidar_to_image(lidar_points, intrinsics, T_lidar2cam, filter_points)
+            depth_map = self.project_lidar_to_image(lidar_points, intrinsics, R, distortion, T_lidar2cam, filter_points)
             
             # Merge with previous depth maps
             if combined_depth is None:
