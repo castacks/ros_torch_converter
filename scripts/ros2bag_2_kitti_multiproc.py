@@ -2,6 +2,7 @@ import os
 import yaml
 import argparse
 import copy
+import json
 import time
 from datetime import timedelta
 import multiprocessing
@@ -40,6 +41,7 @@ RESET = '\033[0m'
 GREEN = '\033[92m'
 GRAY = '\033[90m'
 RED = '\033[91m'
+YELLOW = '\033[33m'
 
 GROUP_COLORS = {
     'autonomy':       '\033[93m',  # Bright yellow
@@ -410,6 +412,7 @@ if __name__ == '__main__':
     with AnyReader([bagpath], default_typestore=typestore) as reader:
         # Do not add topics with 0 count to the queue, else sync issues
         connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
+        topic_msgcount = {x.topic: x.msgcount for x in connections}
 
         queue = setup_queue(reader, list(target_topics), config['dt'])
         topic_frame = {}
@@ -469,11 +472,16 @@ if __name__ == '__main__':
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
 
+    optional_topics = {ci['topic'] for ci in filt_cvt_info.values() if ci['optional']}
+
     topic_valid_masks = {}
+    topic_coverage = {}
     for topic, err in queue['topic_error'].items():
         topic_mask = err < config['interp_tol']
         topic_valid_masks[topic] = topic_mask
-        all_valid_mask = all_valid_mask & topic_mask
+        topic_coverage[topic] = float(topic_mask.mean())
+        if topic not in optional_topics:
+            all_valid_mask = all_valid_mask & topic_mask
 
     # Each topic's tf validity is gated against its own frame's ancestor chain,
     topic_tf_ranges = {}
@@ -493,6 +501,8 @@ if __name__ == '__main__':
     if not all_valid_mask.any():
         print(f"{RED}topics not sync'ed! cause:{RESET}")
         for topic, mask in topic_valid_masks.items():
+            if topic in optional_topics:
+                continue  # optional topics never gate all_valid_mask
             if not mask.any():
                 min_err = np.min(queue['topic_error'][topic])
                 print(f"  {topic}: never within interp_tol={config['interp_tol']} (min error={min_err:.4f}s)")
@@ -503,10 +513,20 @@ if __name__ == '__main__':
 
         assert False, "topics not sync'ed! see cause(s) above"
 
+    total_slots = all_valid_mask.shape[0]
+    print("\nPer-topic frame coverage (optional topics are best-effort synced)")
+    for topic, cov in sorted(topic_coverage.items(), key=lambda kv: kv[1]):
+        kind = "optional" if topic in optional_topics else "required"
+        kept = int(topic_valid_masks[topic].sum())
+        print(f"  {topic}: {kept}/{total_slots} ({cov * 100:.1f}%, {kind}, "
+              f"{topic_msgcount.get(topic, 0)} msgs)")
+
     queue['target_times'] = queue['target_times'][all_valid_mask]
 
     for topic in queue['topic_times'].keys():
-        queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
+        times = queue['topic_times'][topic][all_valid_mask]
+        valid = topic_valid_masks[topic][all_valid_mask]
+        queue['topic_times'][topic] = np.where(valid, times, np.nan)
         queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
     n_frames = int(all_valid_mask.sum())
@@ -618,7 +638,7 @@ if __name__ == '__main__':
         num_workers = min(cpu_budget, int(args.num_workers))
 
     tokitti_start = time.time()
-    print('\n4. Converting to KITTI')
+    print(f'\n[stage] +{timedelta(seconds=int(time.time() - full_start))} 4. Converting to KITTI')
     print(f"\nProcessing {total_workers_needed} workers ({len(filt_cvt_info)} topics) in parallel using {num_workers} pool workers (cpu budget {cpu_budget})...\n")
 
     monitor_thread = Thread(target=display_progress_monitor, args=(progress_queue, sorted(filt_cvt_info.keys()), shard_counts, args.src_dir, args.color))
@@ -652,7 +672,7 @@ if __name__ == '__main__':
     full_dur = time.time() - full_start
     tokitti_dur = time.time() - tokitti_start
     rate = n_frames / tokitti_dur if tokitti_dur > 0 else 0
-    print('\n5. Verification:')
+    print(f'\n[stage] +{timedelta(seconds=int(full_dur))} 5. Verification:')
     print(f"{len(filt_cvt_info)}/{len(cvt_info)} present entries")
     print(f"All present entries completed successfully")
     print(f'Total processing time: {timedelta(seconds=int(full_dur))}')
@@ -663,13 +683,37 @@ if __name__ == '__main__':
     checks = {k: np.sort(np.concatenate(v)) if len(v) > 0 else np.array([]) for k, v in checks.items()}
 
     print("{}/{} valid frames for dataset".format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+
+    topic_summary = {}
+    for ckey, cinfo in sorted(cvt_info.items()):
+        topic = cinfo['topic']
+        if ckey not in filt_cvt_info:
+            topic_summary[topic] = {'frames_written': 0, 'status': 'SKIPPED'}
+            continue
+        idxs = checks.get(topic, np.array([]))
+        frames_written = len(np.unique(idxs)) if len(idxs) > 0 else 0
+        complete = frames_written > 0 and all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+        if complete:
+            status = 'SUCCESS'
+        elif frames_written > 0 and topic in optional_topics:
+            status = 'PARTIAL'
+        else:
+            status = 'FAIL'
+        topic_summary[topic] = {'frames_written': frames_written, 'status': status}
+
     rows = []
-    good_str = "SUCCESS ✓"
-    bad_str = "FAIL ✗"
-    skip_str = "SKIPPED -"
-    good_clr = GREEN if args.color else ''
-    bad_clr = RED if args.color else ''
-    skip_clr = GRAY if args.color else ''
+    status_str = {
+        'SUCCESS': "SUCCESS ✓",
+        'PARTIAL': "PARTIAL ~",
+        'FAIL': "FAIL ✗",
+        'SKIPPED': "SKIPPED -",
+    }
+    status_clr = {
+        'SUCCESS': GREEN if args.color else '',
+        'PARTIAL': YELLOW if args.color else '',
+        'FAIL': RED if args.color else '',
+        'SKIPPED': GRAY if args.color else '',
+    }
 
     for ckey in sorted(cvt_info.keys()):
         cinfo = cvt_info[ckey]
@@ -678,21 +722,19 @@ if __name__ == '__main__':
 
         if ckey not in filt_cvt_info:
             rows.append([
-                apply_color(skip_clr, skip_str),
+                apply_color(status_clr['SKIPPED'], status_str['SKIPPED']),
                 apply_color(grp_clr, topic),
                 apply_color(grp_clr, '- (optional)'),
                 apply_color(grp_clr, '-'),
             ])
             continue
 
-        idxs = checks.get(topic, np.array([]))
-        if len(idxs) > 0:
-            valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
-            status = apply_color(good_clr if valid else bad_clr, good_str if valid else bad_str)
-            frames_str = f'{len(np.unique(idxs))}/{all_valid_mask.sum()}'
+        info = topic_summary[topic]
+        status = apply_color(status_clr[info['status']], status_str[info['status']])
+        if info['frames_written'] > 0:
+            frames_str = f"{info['frames_written']}/{all_valid_mask.sum()}"
         else:
-            status = apply_color(bad_clr, bad_str)
-            frames_str = f'0/{all_valid_mask.sum()} (NO DATA)'
+            frames_str = f"0/{all_valid_mask.sum()} (NO DATA)"
 
         interp_str = str(interp_counts[topic]) if topic in interp_counts else '-'
         rows.append([
@@ -703,10 +745,35 @@ if __name__ == '__main__':
         ])
     print(tabulate(rows, headers=['Status', 'Topic', 'Frames', 'Interp Samples'], tablefmt='github'))
 
+    # Persist the numbers above so they survive OSMO log truncation (see
+    # bag_message_report.py, which reads this back in to build the combined
+    # bag-vs-KITTI report).
+    conversion_stats = {
+        'dt': config['dt'],
+        'interp_tol': config['interp_tol'],
+        'potential_frames': int(all_valid_mask.shape[0]),
+        'kept_frames': int(all_valid_mask.sum()),
+        'binding_topic': min(topic_coverage, key=topic_coverage.get) if topic_coverage else None,
+        'topics': {},
+    }
+    for ckey in sorted(cvt_info.keys()):
+        cinfo = cvt_info[ckey]
+        topic = cinfo['topic']
+        info = topic_summary[topic]
+        conversion_stats['topics'][topic] = {
+            'msg_count': topic_msgcount.get(topic, 0),
+            'coverage': topic_coverage.get(topic),
+            'frames_written': info['frames_written'],
+            'interp_samples': interp_counts.get(topic),
+            'status': info['status'],
+        }
+    with open(os.path.join(args.dst_dir, 'conversion_stats.json'), 'w') as f:
+        json.dump(conversion_stats, f, indent=2)
+
     if not args.no_render_video:
         from tartandriver_utils.video_utils import (
             render_dataset_videos, collect_video_hud_odom, collect_video_hud_imu, load_video_config)
-        print('\n6. Rendering videos...')
+        print(f'\n[stage] +{timedelta(seconds=int(time.time() - full_start))} 6. Rendering videos...')
         viz_dir = os.path.join(args.dst_dir, 'viz')
 
         vcfg = load_video_config(args.video_config)

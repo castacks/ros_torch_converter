@@ -26,11 +26,10 @@
     max_total_converter_workers: 4
     exclude_subdirs: ''        # comma-separated names to skip, or '' / 'none' for all
     converter_extra_args: ''
-    # Hard wall-clock cap (s) per bag's converter. Its internal Pool can spin forever
-    # 0 = no cap.
-    converter_timeout: 3600
     render_video: true
     video_config: config/video/thermal_pip.yaml
     # Reannotate bags missing super_odometry before converting; needs gpu >= 1 cause of roughness!
     reannotate: true
     reannotate_config: tartandriver_deploy/configs/playback/postprocess_super_odometry.yaml
+    num_reannotation_workers: 1
+    phase_batch_size: 6 #0/unset = one batch of everything pending.

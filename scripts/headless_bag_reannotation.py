@@ -127,7 +127,7 @@ def _wait_group(proc, grace):
 def reannotate_bag(src_dir, out_dir, domain_id=None,
                    config_path=DEFAULT_CONFIG, registry_path=DEFAULT_REGISTRY,
                    models_dir=None, use_sim_time=True, settle=8.0,
-                   record_settle=2.0, shutdown_grace=15.0, timeout=None,
+                   record_settle=2.0, record_drain=3.0, shutdown_grace=15.0,
                    localhost_only=True):
     """Reannotate a single bag headlessly; returns the resulting bag path (merged with
     the untouched original when `rosbag_record.topics` is a list of topics)."""
@@ -189,7 +189,8 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
         play_cmd += list(extra_play_args)
         if remap:
             play_cmd += ["--remap"] + list(remap)  # --remap consumes the rest, keep it last
-        subprocess.run(play_cmd, env=env, timeout=timeout, check=True)
+        subprocess.run(play_cmd, env=env, check=True)
+        time.sleep(record_drain)
 
         # 4. stop the recorder first so it flushes a complete mcap
         _sigint_group(record_proc)
@@ -236,7 +237,6 @@ def parse_args():
     parser.add_argument("--models_dir", default=default_models_dir(),
                         help="models_dir launch arg (default $MODELS_DIR or $TARTANDRIVER_HOME/models)")
     parser.add_argument("--settle", type=float, default=8.0)
-    parser.add_argument("--timeout", type=float, default=None, help="hard cap (s) on playback")
     parser.add_argument("--force", action="store_true",
                         help="reannotate even if the bag already has super_odometry")
     return parser.parse_args()
@@ -250,7 +250,7 @@ def main():
     out = reannotate_bag(
         args.src_dir, args.out_dir, domain_id=args.domain_id,
         config_path=args.config, registry_path=args.registry,
-        models_dir=args.models_dir, settle=args.settle, timeout=args.timeout,
+        models_dir=args.models_dir, settle=args.settle,
     )
     print("[reannotate] wrote {}".format(out))
 
