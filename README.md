@@ -61,7 +61,7 @@ python3 scripts/get_slam_data.py --dataset [dataset_dir] --depth --odom \
 - `--depth` extract depth maps, `--odom` extract camera poses 
 - `--config` accepts multiple configs to process RGB + thermal in one run
 - `--idx N` debug extracting single frame, `--idx N M` debug extracting a range
-- `--verbose` per-frame printouts, `--viz` debug visualizations
+- `--verbose` per-frame printouts, `--viz_all` all debug visualizations, `--viz_traj` just trajectory visualizations
 - `--resume` resume from last processed frame, `--seq_to N` process first N frames only
 
 Post-process thermal data (rectify, process):
