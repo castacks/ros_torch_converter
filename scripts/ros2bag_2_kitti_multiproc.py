@@ -134,6 +134,9 @@ def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_
     Monitor and display progress in a live-updating dashboard style.
     Supports sharded topics: multiple workers reporting to the same ckey are aggregated.
     """
+    use_tty = sys.stdout.isatty()
+    redraw_interval = 0.5 if use_tty else 5.0
+
     # shards[ckey][shard_id] = {status, progress, total, fps}
     shards = {
         ckey: {i: {'status': 'waiting', 'progress': 0, 'total': 0, 'fps': 0.0}
@@ -159,7 +162,10 @@ def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_
         return status, progress, total, fps
 
     def print_dashboard():
-        sys.stdout.write('\033[2J\033[H')
+        if use_tty:
+            sys.stdout.write('\033[2J\033[H')
+        else:
+            print()  # plain separator between successive dashboards in a flat log
 
         print('4. Converting to KITTI')
         print(f"bag: {bag}")
@@ -199,13 +205,16 @@ def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_
         sys.stdout.flush()
 
     print_dashboard()
+    last_draw = time.time()
 
     while True:
         try:
             try:
                 ckey, shard_id, status, progress, total, fps = progress_queue.get(timeout=0.5)
                 shards[ckey][shard_id] = {'status': status, 'progress': progress, 'total': total, 'fps': fps}
-                print_dashboard()
+                if time.time() - last_draw >= redraw_interval:
+                    print_dashboard()
+                    last_draw = time.time()
             except:
                 all_done = all(agg(ckey)[0] in ('completed', 'error') for ckey in topic_list)
                 if all_done:
@@ -213,7 +222,7 @@ def display_progress_monitor(progress_queue, topic_list, shard_counts, bag, use_
         except KeyboardInterrupt:
             break
 
-    print_dashboard()
+    print_dashboard()  # always show the final state, regardless of the last redraw's timing
 
 def process_cvt_entry_wrapper(args_tuple):
     """
