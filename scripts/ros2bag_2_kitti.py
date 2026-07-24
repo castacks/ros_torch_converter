@@ -273,10 +273,6 @@ if __name__ == '__main__':
 
     plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
 
-    #save tf
-    if tf_manager is not None:
-        tf_manager.to_kitti(args.dst_dir)
-
     if args.dryrun:
         if not args.no_plot:
             plt.show()

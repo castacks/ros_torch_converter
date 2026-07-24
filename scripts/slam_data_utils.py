@@ -11,37 +11,6 @@ from scipy.spatial.transform import Rotation as R
 import open3d as o3d
 from ros_torch_converter.converter import str_to_cvt_class
 
-def get_camera_pose(dataset, tf_manager, config, idx):
-    try:
-        odom_dir = os.path.join(dataset, "odometry")
-        if not os.path.exists(odom_dir):
-            raise FileNotFoundError(f"Odometry directory not found: {odom_dir}")
-        
-        odom_data = str_to_cvt_class['OdomRBState'].from_kitti(odom_dir, idx, device=config['device'])
-        odom_7d = odom_data.state.cpu().numpy()[:7]
-        timestamp = odom_data.stamp
-
-        odom_frame = config['odometry_frame']
-        cam_frame = config['camera_frame']
-        
-        if not tf_manager.can_transform(odom_frame, cam_frame, timestamp):
-            print(f"Cannot get transforms at timestamp {timestamp}")
-            return None, None, None
-        
-        tf_cam = tf_manager.get_transform(odom_frame, cam_frame, timestamp)
-        T_cam = tf_cam.transform.cpu().numpy()
-        
-        cam_pos = T_cam[:3, 3]
-        cam_rot = R.from_matrix(T_cam[:3, :3]).as_quat()
-        cam_7d = np.concatenate([cam_pos, cam_rot])
-        
-        return odom_7d, cam_7d, timestamp
-        
-    except Exception as e:
-        print(f"Error getting poses at idx {idx}: {e}")
-        return None, None, None
-
-
 class LidarProjector:
     """
     General-purpose class for projecting LiDAR points onto images.
@@ -118,13 +87,15 @@ class LidarProjector:
             raise ValueError(f"Unrecognized calibration format in {calib}. Rewrite load_calibration() to handle this format.")
     
     
-    def project_lidar_to_image(self, lidar_points, intrinsics, T_lidar2cam=None):
+    def project_lidar_to_image(self, lidar_points, intrinsics, R=None, distortion=None, T_lidar2cam=None):
         """
         Project LiDAR points onto an image.
         
         Args:
             lidar_points: Nx4 or Nx3 numpy array of LiDAR points
             intrinsics: Camera intrinsics as [fx, fy, cx, cy]
+            R: 3x3 rotation matrix mapping raw camera frame to rectified camera frame
+            distortion: Distortion coefficients as [k1, k2, r1, r2]
             T_lidar2cam: 4x4 transformation matrix from LiDAR to camera
             
         Returns:
@@ -138,6 +109,10 @@ class LidarProjector:
         points_homogeneous = np.hstack((points_xyz, np.ones((points_xyz.shape[0], 1))))
         
         points_cam = (T_lidar2cam @ points_homogeneous.T).T
+
+        if R is not None:
+            # Rotate points to rectified camera frame
+            points_cam = (R @ points_cam[:, :-1].T).T
         
         X = points_cam[:, 0]
         Y = points_cam[:, 1]
@@ -162,11 +137,20 @@ class LidarProjector:
                       [0.0, fy, cy],
                       [0.0, 0.0, 1.0]])
 
-        # Project to 2D image
-        uv_homogeneous = K @ np.vstack((X, Y, Z))
-        u = uv_homogeneous[0] / uv_homogeneous[2]
-        v = uv_homogeneous[1] / uv_homogeneous[2]
-        
+        if distortion is None:
+            # Project to 2D image
+            uv_homogeneous = K @ np.vstack((X, Y, Z))
+            u = uv_homogeneous[0] / uv_homogeneous[2]
+            v = uv_homogeneous[1] / uv_homogeneous[2]
+        else:
+            rvec = np.zeros((3,1), dtype=np.float32)
+            tvec = np.zeros((3,1), dtype=np.float32)
+            # project points, accounting for image distortion
+            image_points, _ = cv2.projectPoints(np.vstack((X, Y, Z)), rvec, tvec, K, distortion)
+            pts = image_points.reshape(-1, 2)
+            u = pts[:, 0]
+            v = pts[:, 1]
+
         valid_bounds = (u >= 0) & (u < self.img_width) & (v >= 0) & (v < self.img_height)
         u = u[valid_bounds]
         v = v[valid_bounds] 
@@ -187,7 +171,7 @@ class LidarProjector:
         
         return depth_map
     
-    def project_and_merge_multiple_scans(self, lidar_paths, intrinsics, T_lidar2cam=None, filter_points=True):
+    def project_and_merge_multiple_scans(self, lidar_paths, intrinsics, R=None, distortion=None, T_lidar2cam=None, filter_points=True):
         """
         Project multiple LiDAR scans and merge them into a single depth map.
         
@@ -205,7 +189,7 @@ class LidarProjector:
         for lidar_path in lidar_paths:
             lidar_points = self.load_lidar(lidar_path)
             
-            depth_map = self.project_lidar_to_image(lidar_points, intrinsics, T_lidar2cam, filter_points)
+            depth_map = self.project_lidar_to_image(lidar_points, intrinsics, R, distortion, T_lidar2cam, filter_points)
             
             # Merge with previous depth maps
             if combined_depth is None:
@@ -284,121 +268,82 @@ def get_lidar2cam_transform(extrinsics):
     return T_lidar2cam
 
 # ========================= Visualization =========================
-def visualize_points(points):
+def visualize_points(points, window_name="Point Cloud"):
     if isinstance(points, torch.Tensor):
         points = points.cpu().numpy()
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
-    o3d.visualization.draw_geometries([pcd])
+    o3d.visualization.draw_geometries([pcd], window_name=window_name)
+
+def _poses_to_lineset(positions, color):
+    lines = [[i, i+1] for i in range(len(positions)-1)]
+    ls = o3d.geometry.LineSet()
+    ls.points = o3d.utility.Vector3dVector(positions)
+    ls.lines = o3d.utility.Vector2iVector(lines)
+    ls.colors = o3d.utility.Vector3dVector([color] * len(lines))
+    return ls
+
+def _make_marker(position, color, radius=0.15):
+    sphere = o3d.geometry.TriangleMesh.create_sphere(radius=radius)
+    sphere.translate(position)
+    sphere.paint_uniform_color(color)
+    sphere.compute_vertex_normals()
+    return sphere
 
 def visualize_trajectories(odom_poses, camera_poses, config):
-    num_frames = len(odom_poses)
-    print(f"Visualizing {num_frames} poses")
-    
-    if num_frames == 0:
+    if len(odom_poses) == 0 and len(camera_poses) == 0:
         print("No poses to visualize")
         return
-    
+
     def pose_7d_to_matrix(pose_7d):
         T = np.eye(4)
         T[:3, 3] = pose_7d[:3]
         T[:3, :3] = R.from_quat(pose_7d[3:7]).as_matrix()
         return T
-    
-    odom_transforms = [pose_7d_to_matrix(pose) for pose in odom_poses]
-    camera_transforms = [pose_7d_to_matrix(pose) for pose in camera_poses]
-    
-    odom_positions = np.array([T[:3, 3] for T in odom_transforms])
-    odom_rotations = np.array([T[:3, :3] for T in odom_transforms])
-    camera_positions = np.array([T[:3, 3] for T in camera_transforms])
-    camera_rotations = np.array([T[:3, :3] for T in camera_transforms])
-    
-    print(f"Odometry position range: {odom_positions.min(axis=0)} to {odom_positions.max(axis=0)}")
-    print(f"Camera position range: {camera_positions.min(axis=0)} to {camera_positions.max(axis=0)}")
 
-    fig = plt.figure(figsize=(20, 10))
-    
-    ax1 = fig.add_subplot(121, projection='3d')
-    ax1.view_init(elev=20, azim=45)
-    ax1.set_box_aspect([1,1,1])
-    ax1.grid(True)
-    ax1.set_title('Combined Trajectories', fontsize=14)
-    
-    odom_line = ax1.plot(odom_positions[:, 0], odom_positions[:, 1], odom_positions[:, 2], 
-            label=f'Odometry ({config["odometry_frame"]})', color='blue', linewidth=3)[0]
-    camera_line = ax1.plot(camera_positions[:, 0], camera_positions[:, 1], camera_positions[:, 2], 
-            label=f'Camera ({config["camera_frame"]})', color='red', linewidth=4)[0]
-    
-    odom_max_range = max(np.ptp(odom_positions[:, 0]), np.ptp(odom_positions[:, 1]), np.ptp(odom_positions[:, 2]))
-    odom_x_mid = (odom_positions[:, 0].max() + odom_positions[:, 0].min()) / 2
-    odom_y_mid = (odom_positions[:, 1].max() + odom_positions[:, 1].min()) / 2
-    odom_z_mid = (odom_positions[:, 2].max() + odom_positions[:, 2].min()) / 2
-    padding = odom_max_range * 0.1
-    ax1.set_xlim(odom_x_mid - odom_max_range/2 - padding, odom_x_mid + odom_max_range/2 + padding)
-    ax1.set_ylim(odom_y_mid - odom_max_range/2 - padding, odom_y_mid + odom_max_range/2 + padding)
-    ax1.set_zlim(odom_z_mid - odom_max_range/2 - padding, odom_z_mid + odom_max_range/2 + padding)
-    
-    ax1.scatter(odom_positions[0, 0], odom_positions[0, 1], odom_positions[0, 2], 
-              color='green', s=150, marker='o', label='Start', edgecolor='black')
-    ax1.scatter(odom_positions[-1, 0], odom_positions[-1, 1], odom_positions[-1, 2], 
-              color='orange', s=150, marker='s', label='End', edgecolor='black')
-    
-    ax1.set_xlabel('X (m)', fontsize=10)
-    ax1.set_ylabel('Y (m)', fontsize=10)
-    ax1.set_zlabel('Z (m)', fontsize=10)
-    ax1.legend(loc='upper left', fontsize=9)
-    
-    ax2 = fig.add_subplot(122, projection='3d')
-    ax2.view_init(elev=20, azim=45)
-    ax2.set_box_aspect([1,1,1])
-    ax2.grid(True)
-    ax2.set_title('Camera Trajectory (Zoomed)', fontsize=14)
-    
-    ax2.plot(camera_positions[:, 0], camera_positions[:, 1], camera_positions[:, 2], 
-            label=f'Camera ({config["camera_frame"]})', color='red', linewidth=4)
-    
-    cam_max_range = max(np.ptp(camera_positions[:, 0]), np.ptp(camera_positions[:, 1]), np.ptp(camera_positions[:, 2]))
-    if cam_max_range < 0.01:
-        cam_max_range = 0.1
-    cam_x_mid = (camera_positions[:, 0].max() + camera_positions[:, 0].min()) / 2
-    cam_y_mid = (camera_positions[:, 1].max() + camera_positions[:, 1].min()) / 2
-    cam_z_mid = (camera_positions[:, 2].max() + camera_positions[:, 2].min()) / 2
-    cam_padding = cam_max_range * 0.2
-    ax2.set_xlim(cam_x_mid - cam_max_range/2 - cam_padding, cam_x_mid + cam_max_range/2 + cam_padding)
-    ax2.set_ylim(cam_y_mid - cam_max_range/2 - cam_padding, cam_y_mid + cam_max_range/2 + cam_padding)
-    ax2.set_zlim(cam_z_mid - cam_max_range/2 - cam_padding, cam_z_mid + cam_max_range/2 + cam_padding)
-    
-    n = max(1, num_frames // 10)
-    arrow_scale = cam_max_range * 0.1
-    colors = ['red', 'green', 'blue']
-    
-    for i in range(0, num_frames, n):
-        pos = camera_positions[i]
-        rot_matrix = camera_rotations[i]
-        for j in range(3):
-            ax2.quiver(pos[0], pos[1], pos[2],
-                     rot_matrix[0, j] * arrow_scale,
-                     rot_matrix[1, j] * arrow_scale, 
-                     rot_matrix[2, j] * arrow_scale,
-                     color=colors[j], arrow_length_ratio=0.3, alpha=0.8, linewidth=2)
-    
-    ax2.scatter(camera_positions[0, 0], camera_positions[0, 1], camera_positions[0, 2], 
-              color='green', s=150, marker='o', label='Start', edgecolor='black')
-    ax2.scatter(camera_positions[-1, 0], camera_positions[-1, 1], camera_positions[-1, 2], 
-              color='orange', s=150, marker='s', label='End', edgecolor='black')
-    
-    x_axis = ax2.plot([], [], color='red', label='X-axis', linewidth=3, alpha=0.7)[0]
-    y_axis = ax2.plot([], [], color='green', label='Y-axis', linewidth=3, alpha=0.7)[0]
-    z_axis = ax2.plot([], [], color='blue', label='Z-axis', linewidth=3, alpha=0.7)[0]
-    
-    ax2.set_xlabel('X (m)', fontsize=10)
-    ax2.set_ylabel('Y (m)', fontsize=10)
-    ax2.set_zlabel('Z (m)', fontsize=10)
-    ax2.legend(loc='upper left', fontsize=9)
-    
-    plt.tight_layout()
-    plt.show()
-    
-    odom_distance = np.sum(np.linalg.norm(np.diff(odom_positions, axis=0), axis=1))
-    camera_distance = np.sum(np.linalg.norm(np.diff(camera_positions, axis=0), axis=1))
-    print(f"Odometry distance: {odom_distance:.2f} m, Camera distance: {camera_distance:.2f} m")
+    geometries = []
+    all_positions = []
+
+    if len(odom_poses) > 0:
+        odom_transforms = [pose_7d_to_matrix(pose) for pose in odom_poses]
+        odom_positions = np.array([T[:3, 3] for T in odom_transforms])
+        all_positions.append(odom_positions)
+        print(f"Odometry: {len(odom_poses)} poses, distance: {np.sum(np.linalg.norm(np.diff(odom_positions, axis=0), axis=1)):.2f}m")
+        print(f"  range: {odom_positions.min(axis=0)} to {odom_positions.max(axis=0)}")
+        geometries.append(_poses_to_lineset(odom_positions, [0.0, 0.0, 1.0]))
+
+    if len(camera_poses) > 0:
+        camera_transforms = [pose_7d_to_matrix(pose) for pose in camera_poses]
+        camera_positions = np.array([T[:3, 3] for T in camera_transforms])
+        all_positions.append(camera_positions)
+        print(f"Camera: {len(camera_poses)} poses, distance: {np.sum(np.linalg.norm(np.diff(camera_positions, axis=0), axis=1)):.2f}m")
+        print(f"  range: {camera_positions.min(axis=0)} to {camera_positions.max(axis=0)}")
+        geometries.append(_poses_to_lineset(camera_positions, [1.0, 0.0, 0.0]))
+
+    ref_positions = all_positions[0]
+    traj_extent = max(np.ptp(ref_positions[:, 0]), np.ptp(ref_positions[:, 1]), np.ptp(ref_positions[:, 2]))
+    marker_radius = max(0.05, traj_extent * 0.01)
+    frame_scale = max(0.1, traj_extent * 0.03)
+
+    geometries.append(_make_marker(ref_positions[0], [0.0, 1.0, 0.0], marker_radius))
+    geometries.append(_make_marker(ref_positions[-1], [1.0, 0.5, 0.0], marker_radius))
+
+    # coordinate frames along camera trajectory (or odom if no camera)
+    viz_transforms = camera_transforms if len(camera_poses) > 0 else odom_transforms
+    n = max(1, len(viz_transforms) // 20)
+    for i in range(0, len(viz_transforms), n):
+        frame = o3d.geometry.TriangleMesh.create_coordinate_frame(size=frame_scale)
+        frame.transform(viz_transforms[i])
+        geometries.append(frame)
+
+    geometries.append(o3d.geometry.TriangleMesh.create_coordinate_frame(size=frame_scale * 2))
+
+    legend = []
+    if len(odom_poses) > 0:
+        legend.append(f"Blue=odom ({config.get('odometry_frame', '')})")
+    if len(camera_poses) > 0:
+        legend.append(f"Red=camera ({config.get('camera_frame', '')})")
+    legend.append("Green sphere=start, Orange sphere=end")
+    print(", ".join(legend))
+
+    o3d.visualization.draw_geometries(geometries, window_name="Trajectory Visualization")

@@ -1,11 +1,18 @@
 image_dir: image_left_rect
 pointcloud_dir: pointcloud_in_odom
-depth_output_dir: slam_depth_rgb_stack20_temp
-pose_output_dir: camera_poses_rgb_temp
+depth_output_dir: slam_depth_rgb #_stack20
+pose_output_dir: camera_poses_rgb
 mask_path: /home/tartandriver/tartandriver_ws/src/perception/physics_atv_visual_mapping/data/masks/yamaha/image_left_color_mask.png
 
 intrinsics: #fx,fy,cx,cy
   - [455.7750, 456.3191, 497.1180, 251.8580]
+rectified_img: true
+R:
+  - [0.9999926686286926, -0.001692004851065576, 0.003427336923778057]
+  - [0.0016923071816563606, 0.9999985694885254, -8.531315688742325e-05]
+  - [-0.003427187679335475, 9.11126408027485e-05, 0.9999940991401672]
+distortion:
+  - [-0.03597196191549301, 0.08101943135261536, -0.00028405245393514633, 0.0011874435003846884]
 pointcloud_frame: sensor_init
 camera_frame: multisense/left_camera_optical_frame
 odometry_frame: sensor_init
@@ -15,6 +22,6 @@ vehicle_2_cam:
   q: [0.55940, -0.54718, 0.44603, 0.43442]
 
 use_chain: False
-stack: 10 #stack +-N frames #comment out to disable
+# stack: 10 #stack +-N frames #comment out to disable
 max_depth: 200 #meters
 device: cuda
