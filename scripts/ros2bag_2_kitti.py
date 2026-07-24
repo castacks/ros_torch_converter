@@ -15,7 +15,7 @@ from tartandriver_utils.ros_utils import stamp_to_time
 from tartandriver_utils.os_utils import load_yaml
 
 from ros_torch_converter.converter import str_to_cvt_class
-from ros_torch_converter.tf_manager import TfManager
+from ros_torch_converter.tf_manager import TfManager, rosbag_paths, rosbag_readers
 from ros_torch_converter.datatypes.base import TimeSpec
 from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
 
@@ -116,13 +116,12 @@ if __name__ == '__main__':
     
     print("All message types have converters available ✓")
 
-    bag_fps = sorted([x for x in os.listdir(args.src_dir) if '.mcap' in x])
+    bagpath = Path(args.src_dir)
+    bag_fps = rosbag_paths(bagpath)
 
     print('processing these bags:')
     for bfp in bag_fps:
-        print('\t' + bfp)
-
-    bagpath = Path(args.src_dir)
+        print(f'\t{bfp}')
 
     typestore = get_typestore(Stores.ROS2_HUMBLE)
 
@@ -149,7 +148,7 @@ if __name__ == '__main__':
             exit(0)
 
     print('checking timestamps...')
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
+    with AnyReader(bag_fps, default_typestore=typestore) as reader:
         connections = [x for x in reader.connections if x.topic in target_topics]
 
         assert check_connections(connections, target_topics), "missing topics"
@@ -202,7 +201,7 @@ if __name__ == '__main__':
         tf_tmax = np.inf
     else:
         print('handling tf...')
-        tf_manager = TfManager.from_rosbag(bagpath, device='cuda')
+        tf_manager = TfManager.from_rosbag(bagpath, device='cpu')
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
@@ -287,7 +286,7 @@ if __name__ == '__main__':
     pbars = {k:tqdm.tqdm(desc=k, total=all_valid_mask.sum(), position=i) for i,k in enumerate(cvt_info.keys())}
     interp_buf = {k:[] for k in topics_to_interp}
 
-    with AnyReader([bagpath], default_typestore=typestore) as reader:
+    for reader in rosbag_readers(bagpath, typestore):
         # If rectification is requested, collect camera_info messages
         if args.rectify:
             # Cache for camera_info messages
@@ -337,8 +336,6 @@ if __name__ == '__main__':
 
                 if len(idxs) > 0:
                     checks[topic].append(idxs)
-
-                    torch_data = torch_dtype.from_rosmsg(msg)
                     
                     camera_info_torch = None
                     # Check if we should rectify this image

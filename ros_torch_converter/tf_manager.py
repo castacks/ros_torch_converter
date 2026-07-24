@@ -13,6 +13,21 @@ from ros_torch_converter.datatypes.transform import TransformTorch
 from tartandriver_utils.ros_utils import stamp_to_time
 from tartandriver_utils.geometry_utils import TrajectoryInterpolator, pose_to_htm
 
+
+def rosbag_paths(rosbag_fp):
+    path = Path(rosbag_fp)
+    paths = [path] if (path / "metadata.yaml").is_file() else sorted(path.glob("*.bag"))
+    if not paths:
+        raise FileNotFoundError(f"No ROS1 bags or ROS2 metadata found in {path}")
+    return paths
+
+
+def rosbag_readers(rosbag_fp, typestore):
+    for path in rosbag_paths(rosbag_fp):
+        with AnyReader([path], default_typestore=typestore) as reader:
+            yield reader
+
+
 class TfNode:
     """
     Node for a transform in a tf tree
@@ -305,16 +320,13 @@ class TfManager:
     def from_rosbag(rosbag_fp, use_bag_time=False, dt=0.1, device='cpu'):
         tf_manager = TfManager(device)
 
-        bag_fps = sorted([x for x in os.listdir(rosbag_fp) if '.mcap' in x])
-
         #have every frame keep track of tf to its parent
         frames = {}
-
-        bagpath = Path(rosbag_fp)
+        warned_rewires = set()
 
         typestore = get_typestore(Stores.ROS2_HUMBLE)
 
-        with AnyReader([bagpath], default_typestore=typestore) as reader:
+        with AnyReader(rosbag_paths(rosbag_fp), default_typestore=typestore) as reader:
             connections = [x for x in reader.connections if x.topic in ['/tf', '/tf_static']]
 
             cnt = 1
@@ -339,7 +351,10 @@ class TfManager:
                     else:
                         # Skip transforms that try to rewire the tf tree
                         if src_frame != frames[dst_frame]['parent_frame_id']:
-                            print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[dst_frame]['parent_frame_id']}->{dst_frame})")
+                            rewire = (src_frame, dst_frame, frames[dst_frame]['parent_frame_id'])
+                            if rewire not in warned_rewires:
+                                print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[dst_frame]['parent_frame_id']}->{dst_frame})")
+                                warned_rewires.add(rewire)
                             continue
 
                     if dt > 0. and len(frames[dst_frame]['times']) > 0:

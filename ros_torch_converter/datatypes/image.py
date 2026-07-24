@@ -86,7 +86,7 @@ class ImageTorch(TorchCoordinatorDataType):
         if img.ndim == 3:  # Color image
             img = img[..., :3]
         # For grayscale, do nothing
-        img = torch.from_numpy(img / 255.).float().to(device)
+        img = torch.from_numpy(img).to(device=device, dtype=torch.float32).div_(255.)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
@@ -97,7 +97,7 @@ class ImageTorch(TorchCoordinatorDataType):
         update_info_file(base_dir, 'frame_id', self.frame_id)
 
         save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
-        img = (self.image * 255.).long().cpu().numpy().astype(np.uint8)
+        img = self.image.mul(255.).clamp_(0., 255.).to(torch.uint8).cpu().numpy()
         # img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
         cv2.imwrite(save_fp, img)
 

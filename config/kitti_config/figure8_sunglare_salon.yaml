@@ -4,19 +4,14 @@ backward_interpolation: false
 topics:
   - name: odometry
     group: super_odometry
-    topic: /superodometry/integrated_to_init
+    topic: /integrated_to_init
     type: OdomRBState
     args: {}
   - name: pointcloud_in_odom
     group: super_odometry
-    topic: /superodometry/velodyne_cloud_registered
+    topic: /velodyne_cloud_registered_with_features
     type: PointCloud
     max_age: 1.0
-    args: {}
-  - name: multisense_left_rect_color_intrinsics
-    group: sensors
-    topic: /multisense/left/image_rect_color/camera_info
-    type: Intrinsics
     args: {}
   - name: multisense_left_rect_color
     group: sensors
