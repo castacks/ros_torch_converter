@@ -700,8 +700,9 @@ if __name__ == '__main__':
             topic_summary[topic] = {'frames_written': 0, 'status': 'SKIPPED'}
             continue
         idxs = checks.get(topic, np.array([]))
-        frames_written = len(np.unique(idxs)) if len(idxs) > 0 else 0
-        complete = frames_written > 0 and all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+        uniq = np.unique(idxs)
+        frames_written = len(uniq)
+        complete = frames_written > 0 and np.array_equal(uniq, np.arange(all_valid_mask.sum()))
         if complete:
             status = 'SUCCESS'
         elif frames_written > 0 and topic in optional_topics:
