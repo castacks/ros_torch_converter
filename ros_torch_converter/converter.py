@@ -163,9 +163,9 @@ class ROSTorchConverter(Node):
                 self.data_times[tname] = stamp_to_time(self.get_clock().now().to_msg())
 
     def handle_synchronized_msgs(self, msgs, topic_configs):
-        tname = f"{topic_conf['group']}/{topic_conf['name']}"
         if not self.sync_lock:
             for msg, topic_conf in zip(msgs, topic_configs):
+                tname = f"{topic_conf['group']}/{topic_conf['name']}"
                 self.data[tname] = msg
                 try:
                     self.data_times[tname] = stamp_to_time(msg.header.stamp)
