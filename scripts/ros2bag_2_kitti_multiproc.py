@@ -11,7 +11,6 @@ from threading import Thread
 import sys
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 from pathlib import Path
 from tabulate import tabulate
@@ -337,7 +336,6 @@ if __name__ == '__main__':
     parser.add_argument('--src_dir', type=str, required=True, help='path to input dir')
     parser.add_argument('--dst_dir', type=str, required=True, help='path to output dir')
     parser.add_argument('--dryrun', action='store_true', help='set this flag to check data w/o parsing it')
-    parser.add_argument('--no_plot', action='store_true', help='set this flag to not display the plot')
     parser.add_argument('--force', action='store_true', help='dont ask to overwrite')
     parser.add_argument('--use_bag_time', action='store_true', help='set this flag to use bag time for all stamps (not recommended)')
     parser.add_argument('--fill_missing_stamps', action='store_true', help='set this flag to use bag time for any data which does not have stamps')
@@ -504,9 +502,6 @@ if __name__ == '__main__':
         tf_valid_mask = tf_valid_mask & (times > tmin) & (times < tmax)
     all_valid_mask = all_valid_mask & tf_valid_mask
 
-    tf_tmin = min((r[0] for r in topic_tf_ranges.values()), default=-np.inf)
-    tf_tmax = max((r[1] for r in topic_tf_ranges.values()), default=np.inf)
-
     if not all_valid_mask.any():
         print(f"{RED}topics not sync'ed! cause:{RESET}")
         for topic, mask in topic_valid_masks.items():
@@ -559,37 +554,7 @@ if __name__ == '__main__':
         print('TF TREE:\n')
         print(tf_manager.tf_tree)
 
-    plt.plot(queue['target_times'], marker='.', label='target_times')
-
-    x = np.arange(len(queue['target_times']))
-
-    if tf_manager is not None:
-        if tf_tmin > 0.:
-            idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
-            plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
-
-        if tf_tmax < 1e16:
-            idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
-            plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
-
-    for topic in target_topics:
-        times = queue['topic_times'][topic]
-        error = queue['topic_error'][topic]
-        mask = error < config['interp_tol']
-        plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
-
-    plt.title('time sync graph')
-    plt.legend()
-
-    plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
-
-    #save tf
-    if tf_manager is not None:
-        tf_manager.to_kitti(args.dst_dir)
-
     if args.dryrun:
-        if not args.no_plot:
-            plt.show()
         exit(0)
 
     # Cache camera_info messages if rectification is requested

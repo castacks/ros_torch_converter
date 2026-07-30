@@ -97,6 +97,13 @@ def start_memory_logger(scratch_root, interval=60.0):
     return stop.set  # call to stop logging (it's a daemon, so this is just to quiet the log)
 
 
+def copy_bag_metadata(orig_dir, dst_dir):
+    for name in ("metadata.yaml", "info.yaml"):
+        src = os.path.join(orig_dir, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(dst_dir, name))
+
+
 def local_lsdir_recursive(root_dir):
     """Local-filesystem equivalent of RcloneStager.list(), for full-copy (data_dir) mode."""
     entries = []
@@ -182,6 +189,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
         reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
         merged_dir = reannotate_bag(orig_dir, merged_root, domain_id=domain_id,
                                     record_drain=record_drain, **reann_kwargs)
+        copy_bag_metadata(orig_dir, merged_dir)
 
         out_dir = os.path.join(kitti_out_root, relpath)
         os.makedirs(out_dir, exist_ok=True)
@@ -190,7 +198,8 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
         write_report(report_rows, os.path.join(out_dir, "reannotate_report"))
         try:
             render_sync_viz(merged_dir, resolve_config_path(pipeline_config),
-                             os.path.join(out_dir, "topic_sync_viz.png"))
+                             os.path.join(out_dir, "topic_sync_viz.png"),
+                             out_csv=os.path.join(out_dir, "topic_sync_viz.csv"))
         except Exception as e:
             print(f"[reannotate] {relpath}: topic_sync_viz failed (non-fatal): {e}", flush=True)
 
@@ -214,8 +223,8 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video, video_config, kitti_out_root, stager, data_dir,
-                local_out_dir, converter_workers, merged_bag_dir=None, orig_bag_dir=None,
-                merged_scratch_dir=None):
+                local_out_dir, converter_workers, merged_bag_dir=None,
+                orig_bag_dir=None, merged_scratch_dir=None):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_out_root, relpath)
     os.makedirs(out_dir, exist_ok=True)
@@ -231,10 +240,12 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         else:
             src_dir = os.path.join(data_dir, root_dir, relpath)
 
-        sync_viz_path = os.path.join(out_dir, "topic_sync_viz.png")
-        if not os.path.exists(sync_viz_path):
+        sync_viz_csv_path = os.path.join(out_dir, "topic_sync_viz.csv")
+        if not os.path.exists(sync_viz_csv_path):  # phase 1 (reannotate) may have already written it
             try:
-                render_sync_viz(src_dir, resolve_config_path(pipeline_config), sync_viz_path)
+                render_sync_viz(src_dir, resolve_config_path(pipeline_config),
+                                os.path.join(out_dir, "topic_sync_viz.png"),
+                                out_csv=sync_viz_csv_path)
             except Exception as e:
                 print(f"[convert] {relpath}: topic_sync_viz failed (non-fatal): {e}", flush=True)
 
@@ -270,6 +281,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
 
         print(f"[convert] {relpath}: writing dataset report ...", flush=True)
         report_original_dir = orig_bag_dir if merged_bag_dir else src_dir
+        copy_bag_metadata(report_original_dir, out_dir)
         report_rows = build_report(report_original_dir, merged_bag_dir, kitti_dir=out_dir)
         write_report(report_rows, os.path.join(out_dir, "dataset_report"))
 

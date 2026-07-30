@@ -3,6 +3,7 @@ backward_interpolation (--pipeline_config) so gaps shown here match what the con
 treats as dropped.
 """
 import argparse
+import csv
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -81,8 +82,23 @@ def _short_topic(topic):
     return "/".join(parts[-2:]) if len(parts) > 1 else topic
 
 
-def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_bag_time=False):
-    """Render the sync/dropout figure for `bag_dir` to `out_png`. Returns `out_png`."""
+def _write_sync_csv(target_times, topics, topic_error, interp_tol, out_csv):
+    """Per-grid-slot sync data backing the figure: each required/optional topic's
+    interpolation error and whether it's within interp_tol, one row per target_time."""
+    with open(out_csv, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["target_time"] +
+                         [f"{t}__error_s" for t in topics] +
+                         [f"{t}__valid" for t in topics])
+        for i, tt in enumerate(target_times):
+            errors = [topic_error[t][i] for t in topics]
+            valids = [int(e < interp_tol) for e in errors]
+            writer.writerow([tt] + errors + valids)
+    return out_csv
+
+
+def render_sync_viz(bag_dir, pipeline_config_path, out_png, out_csv=None, gap_panel=True,
+                    use_bag_time=False):
     config = load_yaml(pipeline_config_path)
     dt = config["dt"]
     interp_tol = config["interp_tol"]
@@ -94,6 +110,9 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
     queue, msg_times = compute_sync(bag_dir, topics, dt, backward_interpolation,
                                      use_bag_time=use_bag_time)
     target_times = queue["target_times"]
+
+    if out_csv is not None:
+        _write_sync_csv(target_times, topics, queue["topic_error"], interp_tol, out_csv)
 
     height_ratios = [0.8] + ([1.4] * len(topics) if gap_panel else [])
     fig, axes = plt.subplots(len(height_ratios), 1, figsize=(14, sum(height_ratios) * 0.9),
@@ -141,7 +160,7 @@ def render_sync_viz(bag_dir, pipeline_config_path, out_png, gap_panel=True, use_
     fig.tight_layout()
     fig.savefig(out_png, dpi=200)
     plt.close(fig)
-    return out_png
+    return out_png, out_csv
 
 
 def parse_args():
@@ -152,6 +171,8 @@ def parse_args():
                         help="ros_torch_converter config yaml (same one passed to the KITTI "
                              "converter) -- supplies dt/interp_tol/backward_interpolation/topics")
     parser.add_argument("--out", required=True, help="output PNG path")
+    parser.add_argument("--out_csv", default=None,
+                        help="output CSV path for per-topic sync data (default: --out with .csv extension)")
     parser.add_argument("--no_gap_panel", action="store_true",
                         help="skip the per-topic inter-arrival gap panels")
     parser.add_argument("--use_bag_time", action="store_true",
@@ -161,9 +182,12 @@ def parse_args():
 
 def main():
     args = parse_args()
-    out = render_sync_viz(args.bag_dir, args.pipeline_config, args.out,
-                          gap_panel=not args.no_gap_panel, use_bag_time=args.use_bag_time)
-    print(f"[topic_sync_viz] wrote {out}")
+    out_csv = args.out_csv or str(Path(args.out).with_suffix(".csv"))
+    out_png, out_csv = render_sync_viz(args.bag_dir, args.pipeline_config, args.out,
+                                       out_csv=out_csv, gap_panel=not args.no_gap_panel,
+                                       use_bag_time=args.use_bag_time)
+    print(f"[topic_sync_viz] wrote {out_png}")
+    print(f"[topic_sync_viz] wrote {out_csv}")
 
 
 if __name__ == "__main__":
