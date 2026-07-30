@@ -1,3 +1,4 @@
+# Stereo camera topics
 - name: multisense_right_rect_intrinsics
   group: sensors
   topic: /multisense/right/image_rect/camera_info
@@ -18,4 +19,12 @@
   topic: /multisense/right/image_rect/camera_info
   type: CameraInfo
   max_age: 1.
+  args: {}
+
+- name: multisense_left_rect
+  group: sensors
+  topic: /multisense/left/image_rect
+  type: Image
+  max_age: 1.
+  parallel_workers: 4
   args: {}

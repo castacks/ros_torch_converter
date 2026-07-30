@@ -13,7 +13,7 @@
   parallel_workers: 4
   args: {}
 
-- name: multisense_left_camera_info
+- name: multisense_left_rect_color_camera_info
   group: sensors
   topic: /multisense/left/image_rect_color/camera_info
   type: CameraInfo

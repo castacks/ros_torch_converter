@@ -98,10 +98,9 @@ def start_memory_logger(scratch_root, interval=60.0):
 
 
 def copy_bag_metadata(orig_dir, dst_dir):
-    for name in ("metadata.yaml", "info.yaml"):
-        src = os.path.join(orig_dir, name)
-        if os.path.exists(src):
-            shutil.copy2(src, os.path.join(dst_dir, name))
+    src = os.path.join(orig_dir, "info.yaml")
+    if os.path.exists(src):
+        shutil.copy2(src, os.path.join(dst_dir, "info.yaml"))
 
 
 def local_lsdir_recursive(root_dir):
