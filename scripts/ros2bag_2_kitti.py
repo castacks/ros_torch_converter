@@ -385,7 +385,7 @@ if __name__ == '__main__':
     print('Done processing {} frames.'.format(queue['target_times'].shape[0]))
 
     for topic, idxs in checks.items():
-        valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+        valid = np.array_equal(np.unique(idxs), np.arange(all_valid_mask.sum()))
         print('{} has all frames: {}'.format(topic, valid), flush=True)
 
     if not args.no_render_video:
