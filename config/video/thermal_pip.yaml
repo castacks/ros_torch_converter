@@ -20,3 +20,7 @@ pip:
     margin: 16             # pixels from the edges
     border: 3              # border thickness in px (0 = none)
     border_color: white    # ffmpeg color name
+
+# topics:                    # extra topics to render plain (no pip pairing)
+#   - sensors/multisense_left_rect
+#   - sensors/multisense_right_rect
