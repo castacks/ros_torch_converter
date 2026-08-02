@@ -17,7 +17,7 @@
   backward_interpolation_only: false
 
   #overrride tfs with values from config (STRONGLY RECOMMEND USING)
-  calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/tartan_rgbt/handheld.yaml
+  calib_file: /home/tartandriver/tartan_rgbt_ws/src/extract/static_tf_publisher/config/tartan_rgbt/handheld.yaml
   master_topic: /zed/zed_node/left/image_rect_color
 
   #full-rate (unsynced) topics: extracted at native rate, one folder per entry.
