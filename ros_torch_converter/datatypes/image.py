@@ -8,11 +8,10 @@ import cv_bridge
 import numpy as np
 
 from sensor_msgs.msg import Image, CompressedImage
-from perception_interfaces.msg import FeatureImage
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
-from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
+from ros_torch_converter.datatypes.feature_key_list import FeatureKeyList
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType
 from ros_torch_converter.utils import update_frame_file, update_timestamp_file, read_frame_file, read_timestamp_file
@@ -21,7 +20,6 @@ class ImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for images
     (note that this class is specifically an image type that can be cv_bridged),
-    For arbitrary images, use FeatureImageTorch (which will serialize to a custom message instead)
     """
     to_rosmsg_type = Image
     from_rosmsg_type = Image
@@ -131,7 +129,6 @@ class ThermalImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for images
     (note that this class is specifically an image type that can be cv_bridged),
-    For arbitrary images, use FeatureImageTorch (which will serialize to a custom message instead)
     """
     to_rosmsg_type = Image
     from_rosmsg_type = Image
@@ -399,129 +396,3 @@ class Thermal16bitImageTorch(TorchCoordinatorDataType):
      
     def __repr__(self):
         return "Thermal16bitImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
-     
-class FeatureImageTorch(TorchCoordinatorDataType): 
-    """
-    TorchCoordinator class for feature images
-    unlike ImageTorch, this class can take arbitrary image channels/features,
-    and will serialze to perception_interfaces/FeatureImage instead of sensor_msgs/Image
-    """
-    to_rosmsg_type = FeatureImage
-    from_rosmsg_type = FeatureImage
-
-    def __init__(self, feature_keys, device):
-        super().__init__()
-        self.image = torch.zeros(0,0,3, device=device)
-        self.feature_keys = feature_keys
-        self.device = device
-
-    def from_torch(image, feature_keys):
-        if image.dtype != torch.float32:
-            warnings.warn('Got image type that isnt float32!')
-
-        res = FeatureImageTorch(feature_keys=feature_keys, device=image.device)
-        res.image = image.float()
-        return res
-
-    def from_numpy(image, feature_keys, device):
-        if image.dtype != np.float32:
-            warnings.warn('Got image type that isnt float32!')
-
-        res = FeatureImageTorch(feature_keys=feature_keys, device=device)
-        res.image = torch.tensor(image, dtype=torch.float32, device=device)
-        return res
-    
-    def from_rosmsg(msg, device):
-        warnings.warn('havent implemented featureimg->ros')
-        return None
-
-    def to_rosmsg(self):
-        msg = FeatureImage()
-
-        msg.height = self.image.shape[0]
-        msg.width = self.image.shape[1]
-        msg.num_channels = self.image.shape[2]
-
-        msg.data = self.image.flatten().cpu().numpy().astype("f").tobytes()
-        
-        msg.header.stamp = time_to_stamp(self.stamp)
-        msg.header.frame_id = self.frame_id
-        return msg
-
-    def to_kitti(self, base_dir, idx):
-        """define how to convert this dtype to a kitti file
-        """
-        update_timestamp_file(base_dir, idx, self.stamp)
-        update_frame_file(base_dir, idx, 'frame_id', self.frame_id)
-
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
-
-        metadata = {
-            'feature_keys': [
-                f"{label}, {meta}" for label, meta in zip(
-                    self.feature_keys.label,
-                    self.feature_keys.metainfo
-                )
-            ]
-        }
-
-        yaml.dump(metadata, open(metadata_fp, 'w'), default_flow_style=False)
-
-        data = self.image.cpu().numpy()
-        np.save(data_fp, data)
-
-    def from_kitti(base_dir, idx, device='cpu'):
-        """define how to convert this dtype from a kitti file
-        """
-        data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
-        metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
-        
-        metadata = yaml.safe_load(open(metadata_fp))
-        labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
-        feature_keys = FeatureKeyList(label=list(labels), metainfo=list(metas))
-
-        data = np.load(data_fp)
-        data = torch.tensor(data, dtype=torch.float, device=device)
-
-        img = FeatureImageTorch.from_torch(data, feature_keys)
-        img.stamp = read_timestamp_file(base_dir, idx)
-        img.frame_id = read_frame_file(base_dir, idx, 'frame_id')
-
-        return img
-
-    def to(self, device):
-        self.device = device
-        self.image = self.image.to(device)
-        return self
-    
-    def rand_init(device='cpu'):
-        image = torch.randn(64, 32, 5, device=device)
-        fks = FeatureKeyList(
-            label=[f'feat_{i}' for i in range(5)],
-            metainfo=['rand'] * 5
-        )
-
-        out = FeatureImageTorch.from_torch(image, fks)
-        out.frame_id = 'random'
-        out.stamp = np.random.rand()
-
-        return out
-
-    def __eq__(self, other):
-        if self.frame_id != other.frame_id:
-            return False
-
-        if abs(self.stamp - other.stamp) > 1e-8:
-            return False
-
-        if self.feature_keys != other.feature_keys:
-            return False
-
-        if not torch.allclose(self.image, other.image):
-            return False
-
-        return True        
-
-    def __repr__(self):
-        return "FeatureImageTorch of shape {} (time = {:.2f}, frame = {}, device = {}, feature_keys = {})".format(self.image.shape, self.stamp, self.frame_id, self.device, self.feature_keys)
