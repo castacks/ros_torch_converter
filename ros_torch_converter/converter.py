@@ -15,6 +15,7 @@ from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 # from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.bool import BoolTorch
+from ros_torch_converter.datatypes.imu import ImuTorch
 from tartandriver_utils.ros_utils import stamp_to_time
 
 
@@ -35,6 +36,7 @@ str_to_cvt_class = {
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
     "Bool": BoolTorch,
+    "Imu": ImuTorch,
     "Float32Torch": Float32bitImageTorch,
     # "VoxelGridTorch": VoxelGridTorch
 }

@@ -1,13 +1,20 @@
 ---
-  dt: 0.1
+  # 30 Hz extraction (cameras run at ~30 Hz). Mirror of tartan_rgbt.yaml (10 Hz) with a
+  # tighter dt/interp_tol. Use tartan_rgbt.yaml for the 10 Hz release.
+  dt: 0.0333333
 
-  #allow interpolation up to this many seconds
-  interp_tol: 0.032
+  #TIGHT tolerance: half a 30 Hz frame period (~16.7 ms). The RGB/thermal sensors run ~30 Hz
+  #but are NOT hardware-synchronized, so requiring all modalities within 16.7 ms drops the
+  #frames that don't align tightly (~60% of candidates are kept). This is intentional: we
+  #prefer tightly-synced frames over frame count. Uses nearest-in-time matching (below) rather
+  #than backward-only, since backward-only can be up to a full period (33 ms) stale and would
+  #keep 0 frames at this tolerance.
+  interp_tol: 0.0167
 
-  #set to true to allow past target times to be filled by future data
+  #nearest-in-time matching (past OR future) to keep alignment within +/- interp_tol
   backward_interpolation: true
 
-  backward_interpolation_only: true
+  backward_interpolation_only: false
 
   #overrride tfs with values from config (STRONGLY RECOMMEND USING)
   calib_file: /home/tartandriver/tartandriver_ws/src/core/static_tf_publisher/config/tartan_rgbt/handheld.yaml
@@ -26,7 +33,7 @@
       type: Image
       max_age: 1.
       args: {}
-    
+
     - name : zed_right_rect
       topic: /zed/zed_node/right/image_rect_color
       type: Image
@@ -45,52 +52,27 @@
       type: Thermal16bitImage
       max_age: 1.
       args: {}
-    
+
     - name: thermal_left_ffc
       topic: /thermal_left/ffc_status
       type: Bool
       max_age: 1.
       args: {}
-    
+
     - name: thermal_right_ffc
       topic: /thermal_right/ffc_status
       type: Bool
       max_age: 1.
       args: {}
-    
+
     - name: thermal_left_rect_8
       topic: /thermal_left/image_processed
       type: Image
       max_age: 1.
       args: {}
-    
+
     - name: thermal_right_rect_8
       topic: /thermal_right/image_processed
       type: Image
       max_age: 1.
       args: {}
-
-    # - name: thermal_left_intrinsics
-    #   topic: /thermal_left/camera_info
-    #   type: Intrinsics
-    #   max_age: 1.
-    #   args: {}
-    # - name: thermal_right_intrinsics
-    #   topic: /thermal_right/camera_info
-    #   type: Intrinsics
-    #   max_age: 1.
-    #   args: {}
-
-    # - name: zed_left_intrinsics
-    #   topic: /zed/zed_node/left/camera_info
-    #   type: Intrinsics
-    #   max_age: 1.
-    #   args: {}
-    
-    # - name: zed_right_intrinsics
-    #   topic: /zed/zed_node/right/camera_info
-    #   type: Intrinsics
-    #   max_age: 1.
-    #   args: {}
-    
-

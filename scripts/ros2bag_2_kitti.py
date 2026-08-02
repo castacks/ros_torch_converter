@@ -129,6 +129,46 @@ def check_connections(connections, target_topics):
 
     return valid
 
+def extract_full_rate_topics(bagpath, typestore, config, dst_dir):
+    """
+    Extract topics listed under the optional top-level `full_rate_topics:` key at their
+    NATIVE rate (every message, no sync/interp to the camera master clock). Intended for
+    IMU. Each datatype writes via its `write_full_rate(base_dir, samples)` classmethod.
+    """
+    full_rate_topics = config.get('full_rate_topics', [])
+    if not full_rate_topics:
+        return
+
+    topic_to_name = {x['topic']: x['name'] for x in full_rate_topics}
+    topic_to_type = {x['topic']: x['type'] for x in full_rate_topics}
+    want = list(topic_to_name.keys())
+
+    print('extracting {} full-rate topic(s): {}'.format(len(want), want))
+
+    with AnyReader([bagpath], default_typestore=typestore) as reader:
+        conns = [x for x in reader.connections if x.topic in want]
+        present = set(x.topic for x in conns)
+        for t in want:
+            if t not in present:
+                print('  warning: full-rate topic {} missing from bag, skipping'.format(t))
+
+        collected = {t: [] for t in present}
+        for connection, timestamp, rawdata in reader.messages(connections=conns):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            cls = str_to_cvt_class[topic_to_type[connection.topic]]
+            collected[connection.topic].append(cls.from_rosmsg(msg))
+
+    for t, samples in collected.items():
+        cls = str_to_cvt_class[topic_to_type[t]]
+        outdir = os.path.join(dst_dir, topic_to_name[t])
+        if hasattr(cls, 'write_full_rate'):
+            cls.write_full_rate(outdir, samples)
+        else:
+            os.makedirs(outdir, exist_ok=True)
+            for idx, s in enumerate(samples):
+                s.to_kitti(outdir, idx)
+        print('  wrote {} samples to {}'.format(len(samples), outdir))
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=str, required=True, help='path to config')
@@ -295,6 +335,9 @@ if __name__ == '__main__':
         if not args.no_plot:
             plt.show()
         exit(0)
+
+    #extract full-rate (unsynced) topics e.g. IMU
+    extract_full_rate_topics(bagpath, typestore, config, args.dst_dir)
 
     # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
     with AnyReader([bagpath], default_typestore=typestore) as reader:
