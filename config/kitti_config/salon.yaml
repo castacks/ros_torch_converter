@@ -20,6 +20,11 @@
       type: OdomRBState
       args: {}
 
+    # - name: rtk_odometry
+    #   topic: /rtk_gps/ekf/odometry_earth
+    #   type: OdomRBState
+    #   args: {}
+
     - name: multisense_left_intrinsics
       topic: /multisense/left/image_rect_color/camera_info
       type: Intrinsics

@@ -3,64 +3,43 @@ import torch
 import numpy as np
 
 from tartandriver_utils.geometry_utils import MultiDimensionalInterpolator
+from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
-from std_msgs.msg import Float32
+from core_interfaces.msg import BoolStamped
 
-class Float32Torch(TorchCoordinatorDataType):
+class BoolTorch(TorchCoordinatorDataType):
     """
     """
-    to_rosmsg_type = Float32
-    from_rosmsg_type = Float32
-    time_spec = TimeSpec.INTERP
-
-    def to_interp(base_dir, floatlist):
-        data = torch.cat([x.data for x in floatlist]).reshape(-1).cpu().numpy()
-        times = np.array([x.stamp for x in floatlist])
-
-        data_fp = os.path.join(base_dir, 'interp_data.txt')
-        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
-
-        np.savetxt(data_fp, data)
-        np.savetxt(timestamp_fp, times)
-
-    def from_interp(base_dir, target_timestamp, device, tol=0.5):
-        data_fp = os.path.join(base_dir, 'interp_data.txt')
-        timestamp_fp = os.path.join(base_dir, 'interp_timestamps.txt')
-
-        data = np.loadtxt(data_fp).reshape(-1)
-        timestamps = np.loadtxt(timestamp_fp)
-
-        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, tol=tol)
-        data = interp(target_timestamp)
-
-        out = Float32Torch.from_torch(torch.tensor(data)).to(device)
-        out.stamp = target_timestamp
-        out.frame_id = read_info_file(base_dir,  'frame_id')
-
-        return out
+    to_rosmsg_type = BoolStamped
+    from_rosmsg_type = BoolStamped
+    time_spec = TimeSpec.SYNC # interpolating bools is nonsense
 
     def __init__(self, device='cpu'):
         super().__init__()
         self.child_frame_id = ""
-        self.data = torch.zeros(1, device=device)
+        self.data = torch.zeros(1, dtype=bool, device=device)
         self.device = device
     
     def from_torch(x):
-        out = Float32Torch(device=x.device)
+        out = BoolTorch(device=x.device)
         out.data = x
         return out
 
     def from_rosmsg(msg, device='cpu'):
-        res = Float32Torch(device=device)
+        res = BoolTorch(device=device)
         res.data = torch.tensor([msg.data], device=device)
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
         return res
     
     def to_rosmsg(self):
-        msg = Float32()
+        msg = BoolStamped()
         msg.data = self.data.item()
+        msg.header.stamp = time_to_stamp(self.stamp)
+        msg.header.frame_id = self.frame_id
         return msg
     
     def to(self, device):
@@ -76,36 +55,31 @@ class Float32Torch(TorchCoordinatorDataType):
         update_info_file(base_dir, 'frame_id', self.frame_id)
         self.save_to_file(base_dir, idx, file='data.txt')
 
-    def to_kitti_interp(self, base_dir, idx):
-        update_timestamp_file(base_dir, idx, self.stamp, file='interp_timestamps.txt')
-        update_info_file(base_dir, 'frame_id', self.frame_id)
-        self.save_to_file(base_dir, idx, file='interp_data.txt')
-
     def save_to_file(self, base_dir, idx, file='data.txt'):
         save_fp = os.path.join(base_dir, file)
         if not os.path.exists(save_fp):
-            data = float('inf') * np.ones([idx+1])
+            data = bool('inf') * np.ones([idx+1])
         else:
             #need to reshape for 1-row data
             data = np.loadtxt(save_fp).reshape(-1)
 
         if data.shape[0] < (idx+1):
-            data_new = float('inf') * np.ones([idx+1])
+            data_new = bool('inf') * np.ones([idx+1], dtype=bool)
             data_new[:data.shape[0]] = data
             data = data_new
 
         # cannot populate 1D data with array. Must be scalar
         data[idx] = self.data.cpu().numpy().item()
 
-        np.savetxt(save_fp, data)
+        np.savetxt(save_fp, data, fmt='%d')
 
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
 
         data = np.loadtxt(fp).reshape(-1)[idx]
 
-        out = Float32Torch(device=device)
-        out.data = torch.tensor(data, device=device).float()
+        out = BoolTorch(device=device)
+        out.data = torch.tensor(data, device=device).bool()
 
         out.stamp = read_timestamp_file(base_dir, idx)
         out.frame_id = read_info_file(base_dir,  'frame_id')
@@ -120,13 +94,13 @@ class Float32Torch(TorchCoordinatorDataType):
         stamps = read_timestamp_file(base_dir, idxs)
         frame_ids = read_info_file(base_dir,'frame_id')
 
-        out = [Float32Torch.from_torch(x) for x in data]
+        out = [BoolTorch.from_kitti(x) for x in data]
 
         return out
 
     def rand_init(device='cpu'):
-        out = Float32Torch(device=device)
-        out.data = torch.rand(size=(), device=device)
+        out = BoolTorch(device=device)
+        out.data = torch.randint(0,2,size=(), device=device, dtype=bool)
         out.frame_id = 'random'
         out.stamp = np.random.rand()
 
@@ -145,4 +119,4 @@ class Float32Torch(TorchCoordinatorDataType):
         return True
 
     def __repr__(self):
-        return "Float32Torch with data {:.2f}, device {}".format(self.data.item(), self.device)
+        return "BoolTorch with data {}, device {}".format(self.data.item(), self.device)
