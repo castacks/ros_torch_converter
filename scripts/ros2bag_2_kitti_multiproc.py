@@ -494,10 +494,11 @@ if __name__ == '__main__':
     topic_tf_ranges = {}
     tf_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
     for topic, times in queue['topic_times'].items():
-        if tf_manager is None:
+        frame = topic_frame.get(topic)
+        if tf_manager is None or frame is None or not tf_manager.tf_tree.has_frame(frame):
             tmin, tmax = -np.inf, np.inf
         else:
-            tmin, tmax = tf_manager.tf_tree.get_valid_time_range(topic_frame.get(topic))
+            tmin, tmax = tf_manager.get_valid_times(frame, 'vehicle')
         topic_tf_ranges[topic] = (tmin, tmax)
         tf_valid_mask = tf_valid_mask & (times > tmin) & (times < tmax)
     all_valid_mask = all_valid_mask & tf_valid_mask

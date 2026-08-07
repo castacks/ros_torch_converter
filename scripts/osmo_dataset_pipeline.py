@@ -103,6 +103,29 @@ def copy_bag_metadata(orig_dir, dst_dir):
         shutil.copy2(src, os.path.join(dst_dir, "info.yaml"))
 
 
+STORAGE_ID_BY_EXT = {".mcap": "mcap", ".db3": "sqlite3"}
+
+
+def repair_bag_storage_identifier(bag_dir, relpath=""):
+    meta_path = os.path.join(bag_dir, "metadata.yaml")
+    if not os.path.exists(meta_path):
+        return
+    with open(meta_path, "r") as f:
+        metadata = yaml.safe_load(f)
+    info = metadata["rosbag2_bagfile_information"]
+    if info.get("storage_identifier"):
+        return
+    exts = {os.path.splitext(p)[1] for p in info.get("relative_file_paths", [])}
+    storage_ids = {STORAGE_ID_BY_EXT[e] for e in exts if e in STORAGE_ID_BY_EXT}
+    if len(storage_ids) != 1:
+        return  # ambiguous or unrecognized -- leave it for AnyReader to raise its own error
+    info["storage_identifier"] = next(iter(storage_ids))
+    print(f"[repair] {relpath}: metadata.yaml had empty storage_identifier -- "
+          f"set to {info['storage_identifier']!r} from file extension", flush=True)
+    with open(meta_path, "w") as f:
+        yaml.safe_dump(metadata, f, sort_keys=False)
+
+
 def local_lsdir_recursive(root_dir):
     """Local-filesystem equivalent of RcloneStager.list(), for full-copy (data_dir) mode."""
     entries = []
@@ -178,6 +201,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
             stager.copy_in(os.path.join(root_dir, relpath), orig_dir)
         else:
             orig_dir = os.path.join(data_dir, root_dir, relpath)
+        repair_bag_storage_identifier(orig_dir, relpath)
 
         if domain_queue is not None:
             domain_id = domain_queue.get()
@@ -238,6 +262,8 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             src_dir = scratch_dir
         else:
             src_dir = os.path.join(data_dir, root_dir, relpath)
+        if not merged_bag_dir:  # merge_bags() output always has a valid storage_identifier
+            repair_bag_storage_identifier(src_dir, relpath)
 
         sync_viz_csv_path = os.path.join(out_dir, "topic_sync_viz.csv")
         if not os.path.exists(sync_viz_csv_path):  # phase 1 (reannotate) may have already written it

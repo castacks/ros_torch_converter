@@ -2,6 +2,8 @@ import os
 import yaml
 import torch
 import numpy as np
+from collections import defaultdict, deque
+import sys
 
 from pathlib import Path
 
@@ -11,23 +13,19 @@ from rosbags.typesys import Stores, get_typestore
 from ros_torch_converter.datatypes.transform import TransformTorch
 
 from tartandriver_utils.ros_utils import stamp_to_time
-from tartandriver_utils.geometry_utils import TrajectoryInterpolator, pose_to_htm
+from tartandriver_utils.geometry_utils import TrajectoryInterpolator, pose_to_htm, htm_to_pose
 
-class TfNode:
+class TransformData:
     """
-    Node for a transform in a tf tree
+    General class for storing transform information
     """
-    def __init__(self, frame_id, parent_frame_id, transforms, times, is_static, depth=-1):
+    def __init__(self, is_static, transforms, times):
         """
         Args:
-            frame_id: frame id of the node
-            parent_frame_id: frame id of the node's parent
+            is_static: whether the tf changes over time
             transforms: [Tx7] array containing the transform from parent frame to frame
             times: [T] array containing times for transforms
-            is_static: whether the tf changes over time
         """
-        self.frame_id = frame_id
-        self.parent_frame_id = parent_frame_id
         self.is_static = is_static
 
         if self.is_static:
@@ -44,20 +42,197 @@ class TfNode:
             self.t_min = times.min() - self.interp._tol
             self.t_max = times.max() + self.interp._tol
 
+    def get_transform(self, t):
+        return self.transform if self.is_static else self.interp(t)
+
+class TfEdge:
+    def __init__(self, src_frame, dst_frame, transform_data, invert=False):
+        self.src_frame = src_frame
+        self.dst_frame = dst_frame
+        self.transform_data = transform_data
+        self.invert = invert
+
+    def get_transform(self, t):
+        transform = self.transform_data.get_transform(t)
+
+        if self.invert:
+            T = pose_to_htm(transform)
+            return htm_to_pose(np.linalg.inv(T))
+
+        return transform
+
+    def __repr__(self):
+        return "{}->{} (static={})".format(self.src_frame, self.dst_frame, self.transform_data.is_static)
+
+class TfGraph:
+    # transforms only stores ROS TF transforms in their original direction 
+    # (child_frame_id -> header.frame_id)
+    # Forward/reverse graph edges are created internally by TfGraph
+    def __init__(self, transforms):
+        self.graph = defaultdict(dict)
+
+        for src_frame, dst_frames in transforms.items():
+            for dst_frame, transform_dict in dst_frames.items():
+                transform_data=TransformData(
+                    is_static=transform_dict['is_static'],
+                    transforms=transform_dict['transforms'],
+                    times=transform_dict['times']
+                )
+                self._add_edges(src_frame, dst_frame, transform_data)
+
+    def _add_edges(self, src_frame, dst_frame, transform_data):
+        self.graph[src_frame][dst_frame] = TfEdge(
+            src_frame=src_frame,
+            dst_frame=dst_frame,
+            transform_data=transform_data,
+            invert=False
+        )
+
+        self.graph[dst_frame][src_frame] = TfEdge(
+            src_frame=dst_frame,
+            dst_frame=src_frame,
+            transform_data=transform_data,
+            invert=True
+        )
+
+    def add_tf(self, src_frame, dst_frame, transforms, times):
+        data = TransformData(
+            is_static=False, 
+            transforms=transforms, 
+            times=times
+        )
+
+        self._add_edges(src_frame, dst_frame, data)
+
+    def add_static_tf(self, src_frame, dst_frame, transform):
+        data = TransformData(
+            is_static=True,
+            transforms=[transform],
+            times=None
+        )
+
+        self._add_edges(src_frame, dst_frame, data)
+
+    def has_transform(self, src_frame, dst_frame):
+        return dst_frame in self.graph[src_frame]
+    
+    def is_transform_static(self, src_frame, dst_frame):
+        return self.graph[src_frame][dst_frame].transform_data.is_static
+    
+    def get_edge(self, src_frame, dst_frame):
+        return self.graph[src_frame][dst_frame]
+
+    def _cycle_checker(self, frame, visited, parent):
+        visited.add(frame)
+
+        for neighbor in self.graph[frame]:
+            if neighbor in visited:
+                # cycle exists if this neighbor node is not 
+                # the parent of the current node 
+                # (the node that invoked the exploration of this node)
+                if parent[frame] != neighbor:
+                    print(f"Edge going from {frame}->{neighbor} creates a cycle!")
+                    return True
+            else:
+                parent[neighbor] = frame
+                has_cycle = self._cycle_checker(neighbor, visited, parent)
+                if has_cycle:
+                    return True
+        return False
+
+    def validate_graph(self):
+        visited = set()
+        parent = defaultdict(str)
+
+        for frame in self.graph:
+            if frame not in visited:
+                parent[frame] = None
+                has_cycle = self._cycle_checker(frame, visited, parent)
+                if has_cycle:
+                    return True
+        print("tf graph is valid (no cycles detected)")
+        return False
+
+    def create_tree_with_root(self, root_frame_id):
+        # will store list of TfNodes for creating TfTree with
+        nodes = []
+
+        visited = set()
+        queue = deque()
+
+        queue.append(root_frame_id)
+        visited.add(root_frame_id)
+ 
+        while queue:
+            curr = queue.popleft()
+
+            for neighbor in self.graph[curr]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+
+                    edge = self.graph[curr][neighbor]
+
+                    # See Slite documentation for explanation of TfEdge to TfNode conversion
+                    node = TfNode(
+                        frame_id=neighbor,
+                        parent_frame_id=curr,
+                        transform_data=edge.transform_data,
+                        invert=not edge.invert
+                    )
+                    nodes.append(node)
+        
+        tree = TfTree(nodes=nodes)
+        return tree
+
+    def __repr__(self):
+        ret_string = "Stored transforms:\n"
+        for src in self.graph:
+            for dst in self.graph[src]:
+                ret_string += str(self.graph[src][dst]) + "\n"
+        return ret_string
+
+class TfNode:
+    """
+    Node for a transform in a tf tree
+    """
+    def __init__(self, frame_id, parent_frame_id, transform_data, invert=False, depth=-1):
+        """
+        Args:
+            frame_id: frame id of the node
+            parent_frame_id: frame id of the node's parent
+            transform_data: TransformData object storing transform information for this TfNode
+            invert: whether or not this node's transform is the inverse of the data stored in self.transform_data
+        """
+        self.frame_id = frame_id
+        self.parent_frame_id = parent_frame_id
+        self.transform_data = transform_data
+        self.invert = invert        
         self.depth = depth
 
     def dummy_node(fid, depth=-1):
         I = np.array([[0., 0., 0., 0., 0., 0., 1.]])
-        return TfNode(fid, "/ROOT", I, None, True, depth)
+        transform_data = TransformData(
+            is_static=True,
+            transforms=I,
+            times=None
+        )
+        return TfNode(fid, "/ROOT", transform_data, False, depth)
 
     def get_transform(self, t):
         """
         Get the transform from parent_frame_id to frame_id at time t
         """
-        return self.transform if self.is_static else self.interp(t)
+        transform = self.transform_data.get_transform(t)
+
+        if self.invert:
+            T = pose_to_htm(transform)
+            return htm_to_pose(np.linalg.inv(T))
+
+        return transform
 
     def __repr__(self):
-        return "{}->{} (static={})".format(self.parent_frame_id, self.frame_id, self.is_static)
+        return "{}->{} (static={})".format(self.parent_frame_id, self.frame_id, self.transform_data.is_static)
 
 class TfTree:
     """
@@ -97,7 +272,16 @@ class TfTree:
                     curr_parent_frame_id, frame_id, parent_frame_id, frame_id
                 ))
 
-        node = TfNode(frame_id=frame_id, parent_frame_id=parent_frame_id, transforms=[transform], times=None, is_static=True)
+        transform_data = TransformData(
+            is_static=True,
+            transforms=[transform],
+            times=None
+        )
+        node = TfNode(
+            frame_id=frame_id, 
+            parent_frame_id=parent_frame_id, 
+            transform_data=transform_data
+        )
 
         self.nodes[frame_id] = node
         self.recompute_depth()
@@ -112,7 +296,16 @@ class TfTree:
                     curr_parent_frame_id, frame_id, parent_frame_id, frame_id
                 ))
             
-        node = TfNode(frame_id=frame_id, parent_frame_id=parent_frame_id, transforms=transforms, times=times, is_static=False)
+        transform_data = TransformData(
+            is_static=False,
+            transforms=transforms,
+            times=times
+        )
+        node = TfNode(
+            frame_id=frame_id, 
+            parent_frame_id=parent_frame_id,
+            transform_data=transform_data
+        )
         self.nodes[frame_id] = node
         self.recompute_depth()
 
@@ -133,23 +326,6 @@ class TfTree:
             branch.insert(0, curr_node)
 
         return branch
-
-    def get_valid_time_range(self, frame_id):
-        """
-        Time range for which frame_id is resolvable, based on its own ancestor chain
-        (no cross-frame reference needed).
-        """
-        if not self.has_frame(frame_id):
-            return -float('inf'), float('inf')
-
-        branch = self.get_branch(frame_id)
-        if not branch:
-            return -float('inf'), float('inf')
-
-        tmin = max(node.t_min for node in branch)
-        tmax = min(node.t_max for node in branch)
-
-        return tmin, tmax
 
     def get_lca_paths(self, frame1, frame2):
         """
@@ -207,6 +383,7 @@ class TfManager:
     """
     def __init__(self, device):
         self.tf_tree = TfTree(nodes=[])
+        self.tf_graph = TfGraph(transforms=defaultdict(dict))
         self.device = device
 
     def to(self, device):
@@ -215,68 +392,79 @@ class TfManager:
 
     def update_from_calib_config(self, calib_config):
         for calib_tf in calib_config['transform_params']:
-            src_frame = calib_tf['from_frame']
-            dst_frame = calib_tf['to_frame']
+            src_frame = calib_tf['to_frame']
+            dst_frame = calib_tf['from_frame']
 
-            if dst_frame in self.tf_tree.nodes.keys():
-                tf_node = self.tf_tree.nodes[dst_frame]
-
-                if not tf_node.is_static:
-                    print('tf {}->{} is not static. Skipping...'.format(src_frame, dst_frame))
+            if self.tf_graph.has_transform(src_frame, dst_frame):
+                if not self.tf_graph.is_transform_static(src_frame, dst_frame):
+                    print('tf {}->{} or {}->{} is not static. Skipping...'.format(src_frame, dst_frame, dst_frame, src_frame))
                     continue
-                    # print('tf {}->{} is not static. Overriding with calibration...'.format(src_frame, dst_frame))
-                    # # Force override dynamic TF with static calibration to handle old thermal
-                    # transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
-                    # res = self.add_static_tf(src_frame, dst_frame, transform)
 
-                if tf_node.parent_frame_id != src_frame and tf_node.parent_frame_id != "/ROOT":
-                    print('got tf {}->{} in calib, but is {}->{} in data. Skipping...'.format(src_frame, dst_frame, tf_node.parent_frame_id, dst_frame))
-                else:
-                    print('updating tf {}->{}'.format(src_frame, dst_frame))
-                    transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
-                    res = self.add_static_tf(src_frame, dst_frame, transform)
+                print('updating tf {}->{}'.format(src_frame, dst_frame))
+                transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
+                self.add_static_tf(
+                    src_frame, 
+                    dst_frame, 
+                    transform
+                )
 
             else:
-                print('couldnt find tf {}->{} in tf tree! Adding...'.format(src_frame, dst_frame))
+                print('couldnt find tf {}->{} and its inverse in tf graph! Adding...'.format(src_frame, dst_frame))
                 transform = np.array(calib_tf['translation'] + calib_tf['quaternion'])
-                res = self.add_static_tf(src_frame, dst_frame, transform)
+                self.add_static_tf(
+                    src_frame,
+                    dst_frame,
+                    transform
+                )
+        
+        # re-validate graph
+        print("Validating tf graph for cycles...")
+        
+        has_cycle = self.tf_graph.validate_graph()
+        if has_cycle:
+            sys.exit("""Error: tf graph has cycles! 
+                        Transform lookups will not work properly, 
+                        please check your transforms for loops. Exiting...""")
 
-                if not res:
-                    print('couldnt add tf!')
+        # re-initialize tf_tree
+        self.tf_tree = self.tf_graph.create_tree_with_root("vehicle")
 
     def add_static_tf(self, src_frame, dst_frame, transform):
-        return self.tf_tree.add_static_tf(parent_frame_id=src_frame, frame_id=dst_frame, transform=transform)
+        return self.tf_graph.add_static_tf(src_frame=src_frame, dst_frame=dst_frame, transform=transform)
 
     def add_tf(self, src_frame, dst_frame, transforms, times):
-        return self.tf_tree.add_tf(parent_frame_id=src_frame, frame_id=dst_frame, transforms=transforms, times=times)
+        return self.tf_graph.add_tf(src_frame=src_frame, dst_frame=dst_frame, transforms=transforms, times=times)
 
     def to_kitti(self, run_dir):
         base_dir = os.path.join(run_dir, 'tf')
 
-        metadata = {"frames": []}
+        metadata = {"transforms": []}
 
-        for node in self.tf_tree.nodes.values():
-            if node.parent_frame_id == "/ROOT":
-                continue
+        for src_frame in self.tf_graph.graph:
+            for dst_frame in self.tf_graph.graph[src_frame]:
+                edge = self.tf_graph.get_edge(src_frame, dst_frame)
 
-            metadata["frames"].append({
-                'frame': node.frame_id,
-                'parent': node.parent_frame_id,
-                'static': node.is_static
-            })
+                # only need to store the transform in one direction, 
+                # since the other direction is just the inverse
+                if not edge.invert:
+                    metadata["transforms"].append({
+                        'src_frame': src_frame,
+                        'dst_frame': dst_frame,
+                        'static': edge.transform_data.is_static
+                    })
 
-            save_fp = os.path.join(base_dir, "{}_to_{}".format(
-                    node.parent_frame_id.replace('/', '-'),
-                    node.frame_id.replace('/', '-')
-            ))
+                    save_fp = os.path.join(base_dir, "{}_to_{}".format(
+                        edge.src_frame.replace('/', '-'),
+                        edge.dst_frame.replace('/', '-')
+                    ))
 
-            os.makedirs(save_fp, exist_ok=True)
+                    os.makedirs(save_fp, exist_ok=True)
 
-            if node.is_static:
-                np.savetxt(os.path.join(save_fp, "static_transform.txt"), node.transform)
-            else:
-                np.savetxt(os.path.join(save_fp, "timestamps.txt"), node.times)
-                np.savetxt(os.path.join(save_fp, "transforms.txt"), node.transforms)
+                    if edge.transform_data.is_static:
+                        np.savetxt(os.path.join(save_fp, "static_transform.txt"), edge.transform_data.transform)
+                    else:
+                        np.savetxt(os.path.join(save_fp, "timestamps.txt"), edge.transform_data.times)
+                        np.savetxt(os.path.join(save_fp, "transforms.txt"), edge.transform_data.transforms)
 
         with open(os.path.join(base_dir, "metadata.yaml"), 'w') as f:
             yaml.dump(metadata, f)
@@ -288,34 +476,44 @@ class TfManager:
 
         metadata = yaml.safe_load(open(metadata_fp, 'r'))
 
-        frames = {}
+        all_transforms = defaultdict(dict)
 
-        for frame_metadata in metadata["frames"]:
-            frame_dir = os.path.join(base_dir, "{}_to_{}".format(
-                    frame_metadata["parent"].replace('/', '-'),
-                    frame_metadata["frame"].replace('/', '-')
+        for transform_metadata in metadata["transforms"]:
+            transform_dir = os.path.join(base_dir, "{}_to_{}".format(
+                transform_metadata["src_frame"].replace('/', '-'),
+                transform_metadata["dst_frame"].replace('/', '-')
             ))
 
-            dst_frame = frame_metadata["frame"]
-            src_frame = frame_metadata["parent"]
-            is_static = frame_metadata["static"]
+            dst_frame = transform_metadata["dst_frame"]
+            src_frame = transform_metadata["src_frame"]
+            is_static = transform_metadata["static"]
 
             if is_static:
-                transforms = np.loadtxt(os.path.join(frame_dir, "static_transform.txt")).reshape(1, 7)
+                transforms = np.loadtxt(os.path.join(transform_dir, "static_transform.txt")).reshape(1, 7)
                 timestamps = np.zeros(1)
             else:
-                transforms = np.loadtxt(os.path.join(frame_dir, "transforms.txt"))
-                timestamps = np.loadtxt(os.path.join(frame_dir, "timestamps.txt"))
+                transforms = np.loadtxt(os.path.join(transform_dir, "transforms.txt"))
+                timestamps = np.loadtxt(os.path.join(transform_dir, "timestamps.txt"))
 
-            frames[dst_frame] = {
-                'frame_id': dst_frame,
-                'parent_frame_id': src_frame,
+            all_transforms[src_frame][dst_frame] = {
+                'src_frame': src_frame,
+                'dst_frame': dst_frame,
                 'is_static': is_static,
                 'transforms': transforms,
                 'times': timestamps
             }
 
-        tf_manager.tf_tree = TfTree(nodes=[TfNode(**v) for v in frames.values()])
+        tf_manager.tf_graph = TfGraph(all_transforms)
+        
+        print("Validating tf graph for cycles...")
+        
+        has_cycle = tf_manager.tf_graph.validate_graph()
+        if has_cycle:
+            sys.exit("""Error: tf graph has cycles! 
+                        Transform lookups will not work properly, 
+                        please check your transforms for loops. Exiting...""")
+
+        tf_manager.tf_tree = tf_manager.tf_graph.create_tree_with_root("vehicle")
     
         return tf_manager
 
@@ -324,8 +522,8 @@ class TfManager:
 
         bag_fps = sorted([x for x in os.listdir(rosbag_fp) if '.mcap' in x])
 
-        #have every frame keep track of tf to its parent
-        frames = {}
+        # adjacency list of (parent_frame_id, list of transforms with this frame as parent_frame_id)
+        transforms = defaultdict(dict)
 
         bagpath = Path(rosbag_fp)
 
@@ -341,26 +539,21 @@ class TfManager:
                 topic = connection.topic
 
                 for tf_msg in msg.transforms:
-                    src_frame = tf_msg.header.frame_id
-                    dst_frame = tf_msg.child_frame_id
+                    src_frame = tf_msg.child_frame_id
+                    dst_frame = tf_msg.header.frame_id
                     t = stamp_to_time(tf_msg.header.stamp)
 
-                    if dst_frame not in frames.keys():
-                        frames[dst_frame] = {
-                            'frame_id': dst_frame,
-                            'parent_frame_id': src_frame,
+                    if dst_frame not in transforms[src_frame]:
+                        transforms[src_frame][dst_frame] = {
+                            'src_frame': src_frame,
+                            'dst_frame': dst_frame,
                             'is_static': topic == '/tf_static',
                             'transforms': np.zeros([0, 7]),
                             'times': np.zeros(0)
                         }
-                    else:
-                        # Skip transforms that try to rewire the tf tree
-                        if src_frame != frames[dst_frame]['parent_frame_id']:
-                            print(f"Warning: Skipping transform {src_frame}->{dst_frame} (already have {frames[dst_frame]['parent_frame_id']}->{dst_frame})")
-                            continue
-
-                    if dt > 0. and len(frames[dst_frame]['times']) > 0:
-                        if t - frames[dst_frame]['times'][-1] < dt:
+                    
+                    if dt > 0. and len(transforms[src_frame][dst_frame]['times']) > 0:
+                        if t - transforms[src_frame][dst_frame]['times'][-1] < dt:
                             continue
 
                     tf_data = np.array([
@@ -373,12 +566,22 @@ class TfManager:
                         tf_msg.transform.rotation.w
                     ])
 
-                    frames[dst_frame]['times'] = np.append(frames[dst_frame]['times'], t)
-                    frames[dst_frame]['transforms'] = np.append(frames[dst_frame]['transforms'], tf_data.reshape(1,7), axis=0)
+                    transforms[src_frame][dst_frame]['times'] = np.append(transforms[src_frame][dst_frame]['times'], t)
+                    transforms[src_frame][dst_frame]['transforms'] = np.append(transforms[src_frame][dst_frame]['transforms'], tf_data.reshape(1,7), axis=0)
                     
                 cnt += 1
 
-        tf_manager.tf_tree = TfTree(nodes=[TfNode(**v) for v in frames.values()])
+        tf_manager.tf_graph = TfGraph(transforms)
+        
+        print("Validating tf graph for cycles...")
+        
+        has_cycle = tf_manager.tf_graph.validate_graph()
+        if has_cycle:
+            sys.exit("""Error: tf graph has cycles! 
+                        Transform lookups will not work properly, 
+                        please check your transforms for loops. Exiting...""")
+        
+        tf_manager.tf_tree = tf_manager.tf_graph.create_tree_with_root("vehicle")
     
         return tf_manager
 
@@ -392,8 +595,8 @@ class TfManager:
         lca_paths = self.tf_tree.get_lca_paths(frame1, frame2)
         if lca_paths:
             all_tfs = lca_paths[0] + lca_paths[1]
-            tmin = max([node.t_min for node in all_tfs])
-            tmax = min([node.t_max for node in all_tfs])
+            tmin = max([node.transform_data.t_min for node in all_tfs])
+            tmax = min([node.transform_data.t_max for node in all_tfs])
 
             return tmin, tmax
         else:
