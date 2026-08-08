@@ -2,7 +2,7 @@
   dt: 0.1
 
   #allow interpolation up to this many seconds
-  interp_tol: 0.5
+  interp_tol: 0.2 # used to be 0.5
 
   #set to true to allow past target times to be filled by future data
   backward_interpolation: false
@@ -17,5 +17,6 @@
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/actuation_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/novatel_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/gq7_topics.yaml
-    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/racepak_topics.yaml
+    # - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/racepak_topics.yaml
     - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/super_odometry_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/mpc_topics.yaml
