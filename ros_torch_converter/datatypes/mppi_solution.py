@@ -155,6 +155,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         msg.control_keys = self.control_keys
         msg.h = self.h
         msg.dt = self.dt
+        msg.solution_cost = float(self.solution_cost)
 
         msg.cost_terms = self.cost_terms
         msg.solution_feasible = self.solution_feasible

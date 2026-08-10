@@ -1,0 +1,10 @@
+dt: 0.1
+interp_tol: 0.2
+backward_interpolation: false
+topics:
+  - name: multisense_left_rect_color
+    group: sensors
+    topic: /multisense/left/image_rect_color
+    type: Image
+    max_age: 1.0
+    args: {}
