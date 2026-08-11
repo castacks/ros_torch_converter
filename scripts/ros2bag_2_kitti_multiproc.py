@@ -438,12 +438,6 @@ if __name__ == '__main__':
     #update the tf tree
     frame_list = list(frame_list)
 
-    # TODO FIX THIS TF HACK
-    temp_ignore = ['gq7_imu_link', 'earth', 'gps_frame', 'map', 'multisense/left_camera_optical_frame']
-    for fr in temp_ignore:
-        if fr in frame_list:
-            frame_list.remove(fr)
-
     has_calib_file = False
     if 'calibration' in config.keys():
         print('applying calib file from config...')
