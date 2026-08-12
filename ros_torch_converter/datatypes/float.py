@@ -94,7 +94,8 @@ class Float32Torch(TorchCoordinatorDataType):
             data_new[:data.shape[0]] = data
             data = data_new
 
-        data[idx] = self.data.cpu().numpy()
+        # cannot populate 1D data with array. Must be scalar
+        data[idx] = self.data.cpu().numpy().item()
 
         np.savetxt(save_fp, data)
 

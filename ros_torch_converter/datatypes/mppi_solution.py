@@ -135,7 +135,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         soln.solution_feasible = msg.solution_feasible
         soln.cost_terms = msg.cost_terms
         soln.solution_term_cost = torch.tensor(msg.solution_term_cost, dtype=torch.float32, device=device)
-        soln.solution_term_feasible = msg.solution_term_feasible
+        soln.solution_term_feasible = torch.tensor(msg.solution_term_feasible, dtype=torch.bool, device=device)
 
         # some reshaping
         soln.solution_states = torch.tensor(msg.solution_states.data.reshape(soln.h, soln.state_dim), dtype=torch.float32, device=device)

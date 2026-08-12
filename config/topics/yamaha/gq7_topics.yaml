@@ -1,0 +1,22 @@
+- name: gq7_rtk_odometry
+  group: sensors
+  topic: /rtk_gps/ekf/odometry_earth
+  type: OdomRBState
+  max_age: 1.
+  optional: true
+  args:
+    interpolation:
+      type: MATCH_TOPIC
+      topic: super_odometry/odometry
+
+- name: gq7_rtk_imu
+  group: sensors
+  topic: /rtk_gps/imu/data
+  type: Imu
+  max_age: 1.
+  optional: true
+  args:
+    interpolation:
+      type: MATCH_TOPIC
+      topic: super_odometry/odometry
+
