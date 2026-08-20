@@ -1,18 +1,17 @@
 import copy
-
-from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+import rospy
 from message_filters import ApproximateTimeSynchronizer, Subscriber
 
 from ros_torch_converter.datatypes.bev_grid import BEVGridTorch
+from ros_torch_converter.datatypes.bev_grid_uint8 import BEVGridUInt8Torch
 from ros_torch_converter.datatypes.float import Float32Torch
 from ros_torch_converter.datatypes.command import CommandTorch
 from ros_torch_converter.datatypes.image import (
     ImageTorch,
     CompressedImageTorch,
-    FeatureImageTorch,
-    ThermalImageTorch,
-    Thermal16bitImageTorch,
+    # FeatureImageTorch,
+    # ThermalImageTorch,
+    # Thermal16bitImageTorch,
 )
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch, CameraInfoTorch
 from ros_torch_converter.datatypes.pointcloud import (
@@ -23,7 +22,7 @@ from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransfor
 from ros_torch_converter.datatypes.rb_state import OdomRBStateTorch
 from ros_torch_converter.datatypes.goal_array import GoalArrayTorch
 from ros_torch_converter.datatypes.path import PathTorch
-from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
+# from ros_torch_converter.datatypes.voxel_grid import VoxelGridTorch
 from ros_torch_converter.datatypes.sensor_msgs import (
     ImuTorch,
     NavSatFixTorch,
@@ -36,14 +35,15 @@ from tartandriver_utils.ros_utils import stamp_to_time
 
 str_to_cvt_class = {
     "BEVGrid": BEVGridTorch,
-    "GridMap": BEVGridTorch,  # GridMap is handled by BEVGridTorch
+    "BEVGridUInt8": BEVGridUInt8Torch,
+    "GridMap": BEVGridTorch,
     "Float32": Float32Torch,
     "Command": CommandTorch,
     "Image": ImageTorch,
     "CompressedImage": CompressedImageTorch,
-    "FeatureImage": FeatureImageTorch,
-    "ThermalImage": ThermalImageTorch,
-    "Thermal16bitImage": Thermal16bitImageTorch,
+    # "FeatureImage": FeatureImageTorch,
+    # "ThermalImage": ThermalImageTorch,
+    # "Thermal16bitImage": Thermal16bitImageTorch,
     "Intrinsics": IntrinsicsTorch,
     "CameraInfo": CameraInfoTorch,
     "PointCloud": PointCloudTorch,
@@ -53,7 +53,7 @@ str_to_cvt_class = {
     "OdomRBState": OdomRBStateTorch,
     "GoalArray": GoalArrayTorch,
     "Path": PathTorch,
-    "VoxelGrid": VoxelGridTorch,
+    # "VoxelGrid": VoxelGridTorch,
     "Imu": ImuTorch,
     "NavSatFix": NavSatFixTorch,
     "PoseWithCovarianceStamped": PoseWithCovarianceTorch,
@@ -62,15 +62,15 @@ str_to_cvt_class = {
 }
 
 
-class ROSTorchConverter(Node):
-    """Top-level class that manages conversion from ROS->torch.
-
-    Essentially, this class will spin up a number of subscribers and store the latest message for each.
-    When it is asked for data, it will convert all the messages to torch and return them as a (potentially nested) dict
-    """
+class ROSTorchConverter(object):
+    """Top-level class that manages conversion from ROS1->torch."""
 
     def __init__(self, config, name=""):
-        super().__init__(name + "_ros_torch_converter_node")
+        # In ROS1, we initialize the node globally if it hasn't been already
+        try:
+            rospy.init_node(name + "_ros_torch_converter_node", anonymous=True)
+        except rospy.exceptions.ROSException:
+            pass # Already initialized elsewhere
 
         self.config = config
         self.device = self.config["device"]
@@ -86,7 +86,7 @@ class ROSTorchConverter(Node):
 
         self.setup_subscribers()
 
-        self.get_logger().info("cvt node ready")
+        rospy.loginfo("cvt node ready")
 
     def setup_subscribers(self):
         sync_groups = self.config.get("sync_topics", [])
@@ -103,11 +103,12 @@ class ROSTorchConverter(Node):
         for topic_conf in self.config["topics"]:
             tname = f"{topic_conf['group']}/{topic_conf['name']}"
             if tname not in self.synced_topics:
-                sub = self.create_subscription(
-                    self.converters[tname].from_rosmsg_type, # Message type
-                    topic_conf["topic"], # Topic name
+                # ROS1 rospy.Subscriber syntax (no qos_profile, uses buff_size/queue_size if needed)
+                sub = rospy.Subscriber(
+                    topic_conf["topic"], 
+                    self.converters[tname].from_rosmsg_type, 
                     lambda msg, topic_conf=topic_conf: self.handle_msg(msg, topic_conf),
-                    qos_profile=qos_profile_sensor_data,
+                    queue_size=1
                 )
                 self.subscribers[tname] = sub
 
@@ -123,13 +124,13 @@ class ROSTorchConverter(Node):
             for topic_name in topic_names:
                 topic_conf = next((t for t in self.config["topics"] if t["name"] == topic_name), None)
                 if topic_conf is None:
-                    self.get_logger().warn(f"Sync topic {topic_name} not found in topics list")
+                    rospy.logwarn(f"Sync topic {topic_name} not found in topics list")
                     continue
                 
+                # ROS1 message_filters Subscriber does not take the 'self' node instance
                 sub = Subscriber(
-                    self,
-                    self.converters[topic_name].from_rosmsg_type,
-                    topic_conf["topic"]
+                    topic_conf["topic"],
+                    self.converters[topic_name].from_rosmsg_type
                 )
                 subscribers.append(sub)
                 topic_configs.append(topic_conf)
@@ -150,17 +151,17 @@ class ROSTorchConverter(Node):
             try:
                 self.data_times[tname] = stamp_to_time(msg.header.stamp)
             except:
-                self.data_times[tname] = stamp_to_time(self.get_clock().now().to_msg())
+                self.data_times[tname] = stamp_to_time(rospy.get_rostime())
 
     def handle_synchronized_msgs(self, msgs, topic_configs):
-        tname = f"{topic_conf['group']}/{topic_conf['name']}"
         if not self.sync_lock:
             for msg, topic_conf in zip(msgs, topic_configs):
+                tname = f"{topic_conf['group']}/{topic_conf['name']}"
                 self.data[tname] = msg
                 try:
                     self.data_times[tname] = stamp_to_time(msg.header.stamp)
                 except:
-                    self.data_times[tname] = stamp_to_time(self.get_clock().now().to_msg())
+                    self.data_times[tname] = stamp_to_time(rospy.get_rostime())
 
     def get_data(self, return_times=False, device="cpu"):
         self.lock = True
@@ -172,12 +173,10 @@ class ROSTorchConverter(Node):
             
             cvt = self.converters[tname]
             msg = self.data[tname]
-            #TODO probably need to actually support interpolation here
             args = {k:v for k,v in topic_conf['args'].items() if k != 'interpolation'}
             msg_torch = cvt.from_rosmsg(msg, device=self.device, **args)
             data[tname] = msg_torch
 
-        # data = {k: self.converters[k].from_rosmsg(msg, device=self.device, **self.config["topics"][k]["args"]) for k, msg in self.data.items()}
         times = copy.deepcopy(self.data_times)
         self.lock = False
         self.sync_lock = False
@@ -185,7 +184,7 @@ class ROSTorchConverter(Node):
         return (data, times) if return_times else data
 
     def can_get_data(self):
-        curr_time = stamp_to_time(self.get_clock().now().to_msg())
+        curr_time = stamp_to_time(rospy.get_rostime())
 
         for topic_conf in self.config["topics"]:
             tname = f"{topic_conf['group']}/{topic_conf['name']}"
@@ -198,7 +197,7 @@ class ROSTorchConverter(Node):
         return True
 
     def get_status_str(self):
-        curr_time = stamp_to_time(self.get_clock().now().to_msg())
+        curr_time = stamp_to_time(rospy.get_rostime())
         out = "\n ---converter status--- \n"
         for topic_conf in self.config["topics"]:
             tname = f"{topic_conf['group']}/{topic_conf['name']}"
