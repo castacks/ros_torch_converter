@@ -50,6 +50,7 @@ _REGISTRY_SPEC = {
     "FeatureImage": ("ros_torch_converter.datatypes.image", "FeatureImageTorch"),
     "ThermalImage": ("ros_torch_converter.datatypes.image", "ThermalImageTorch"),
     "Thermal16bitImage": ("ros_torch_converter.datatypes.image", "Thermal16bitImageTorch"),
+    "Thermal8bitImage": ("ros_torch_converter.datatypes.image", "Thermal8bitImageTorch"),
     "Thermal16bitCompressedImage": ("ros_torch_converter.datatypes.image", "CompressedThermal16bitImageTorch"),
     "DepthImage": ("ros_torch_converter.datatypes.depth", "DepthImageTorch"),
     "Intrinsics": ("ros_torch_converter.datatypes.intrinsics", "IntrinsicsTorch"),

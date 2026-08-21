@@ -47,6 +47,9 @@ Extract kitti format data from rosbag:
 ```
 python3 scripts/ros2bag_2_kitti.py --config config/kitti_config/super_odometry_sensors.yaml --src_dir [mcap_dir] --dst_dir [output_dir]
 ```
+- `--rectify` undistorts compressed images using their camera_info (per-topic `rectify: false` override in the config; default is RAW/unrectified). `--ros1` reads ROS1 `.bag` inputs.
+- `--align_to [existing_tree]` reuses that tree's `target_timestamps.txt` as a fixed grid (additive extraction of new modalities).
+- `--time-window T_START T_END` (seconds) restricts extraction to a time window. It is pushed into the `rosbags` reader as an index-based bounded read, so a large bag is never fully scanned/decoded — ideal for pulling a handful of frames out of a multi-GB bag. Available in both `ros2bag_2_kitti.py` (ROS1/ROS2) and `ros2bag_2_kitti_multiproc.py` (ROS2).
 
 Export full scene reconstruction from SLAM to PCD:
 ```

@@ -189,6 +189,27 @@ class CameraInfoTorch(TorchCoordinatorDataType):
         with open(save_fp, 'w') as f:
             yaml.dump(data, f, default_flow_style=False)
 
+    def as_rectified(self):
+        """Return a copy of this camera_info in the RECTIFIED convention.
+
+        When an image is rectified it is undistorted onto the projection matrix P (the rectifier uses
+        new_K = P[:3,:3]) and carries no residual distortion. The matching camera_info is therefore
+        K = P[:3,:3], D = 0, R = identity, with P / width / height / distortion_model / stamp /
+        frame_id preserved. Use this when serializing camera_info for an image that was rectified, so
+        the stored calibration matches the pixels (instead of the raw k/d/r copied verbatim).
+        """
+        res = CameraInfoTorch(device=self.device)
+        res.k = self.p[:, :3].clone()                                   # K := P[:3,:3]
+        res.d = torch.zeros_like(self.d)                                # no residual distortion
+        res.r = torch.eye(3, device=self.device, dtype=self.r.dtype)    # rectified -> identity
+        res.p = self.p.clone()
+        res.distortion_model = self.distortion_model
+        res.width = self.width
+        res.height = self.height
+        res.stamp = getattr(self, 'stamp', None)
+        res.frame_id = getattr(self, 'frame_id', None)
+        return res
+
     def from_kitti(base_dir, idx, device='cpu'):
         res = CameraInfoTorch(device=device)
 

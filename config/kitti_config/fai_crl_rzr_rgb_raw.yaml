@@ -1,0 +1,36 @@
+---
+# Additive KITTI config for the DISTORTED (raw) MultiSense front color image + its raw camera_info.
+#
+# Purpose: extract the SAME color topic as `rgb_front` (fai_crl_rzr_front.yaml) but WITHOUT rectification,
+# so `rgb_front_raw` holds the distorted sensor pixels and `rgb_front_raw_info` keeps the real lens
+# distortion (rational_polynomial D, nonzero). Used by EXP-0008 to compare raw-vs-rectified RGB sharpness
+# (is reviewer-reported blur a rectification artifact, or already in the raw capture?).
+#
+# Run ADDITIVELY over an existing tree so it is index-aligned 1:1 with rgb_front, e.g.:
+#   fai_extractor extract --align-to <kitti> --config .../fai_crl_rzr_rgb_raw.yaml \
+#       --bags <dataset>/rosbag --out <kitti> --frames <idx ...>
+# (--frames drives a tight per-frame --time-window so only those frames are decoded, not the whole bag).
+#
+# NOTE: pass --rectify at the CLI as usual; the per-topic `rectify: false` below overrides it, keeping the
+# color image distorted. Grid fields (dt/interp_tol) are ignored under --align_to (grid comes from the
+# aligned tree's target_timestamps.txt) but kept for a standalone/full run.
+
+dt: 0.4
+interp_tol: 0.6
+backward_interpolation: false
+
+topics:
+  # ---- RGB front RAW (MultiSense aux color, distorted — rectify disabled) ----
+  - name: rgb_front_raw
+    group: multisense_front
+    topic: /crl_rzr/multisense_front/aux/image_color/compressed
+    type: CompressedImage
+    rectify: false                      # keep the color image DISTORTED (raw sensor pixels)
+    max_age: 1.
+    args: {}
+  - name: rgb_front_raw_info
+    group: multisense_front
+    topic: /crl_rzr/multisense_front/aux/image_color/camera_info
+    type: CameraInfo
+    max_age: 1.
+    args: {}

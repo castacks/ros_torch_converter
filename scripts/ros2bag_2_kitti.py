@@ -27,14 +27,28 @@ General algo is something like this:
     2. Then do another pass through to actually convert messages, etc
 """
 
-def setup_queue(reader, config):
+def setup_queue(reader, config, target_times_override=None, window=None):
     """
-    Initialize message queues based on config
-    """
-    start_time = reader.start_time * 1e-9
-    end_time = reader.end_time * 1e-9
+    Initialize message queues based on config.
 
-    target_times = np.arange(start_time, end_time, config['dt'])
+    target_times_override: if given (a 1D array of timestamps, e.g. an existing extraction's
+    target_timestamps.txt), use it as the FIXED time grid instead of arange(start,end,dt). This is
+    how `--align_to` additive extraction lands new modalities on an existing tree's grid.
+
+    window: optional (t_start, t_end) in seconds. Clamps the arange grid to the window, or filters the
+    override grid to it, so extraction is scoped to a time window (pairs with the reader's start/stop).
+    """
+    if target_times_override is not None:
+        target_times = np.asarray(target_times_override, dtype=float).reshape(-1)
+        if window is not None:
+            target_times = target_times[(target_times >= window[0]) & (target_times <= window[1])]
+    else:
+        start_time = reader.start_time * 1e-9
+        end_time = reader.end_time * 1e-9
+        if window is not None:
+            start_time = max(start_time, window[0])
+            end_time = min(end_time, window[1])
+        target_times = np.arange(start_time, end_time, config['dt'])
 
     queue = {
         'target_times': target_times,
@@ -74,7 +88,26 @@ if __name__ == '__main__':
     parser.add_argument('--skip_tf', action='store_true', help='set this flag to skip TF processing (useful if TF tree is broken)')
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--ros1', action='store_true', help='read ROS1 .bag files (merges all per-sensor .bag files in src_dir) instead of ROS2 mcap. Default: autodetect by extension.')
+    parser.add_argument('--align_to', type=str, default=None,
+                        help='ADDITIVE extraction: path to an existing KITTI tree whose '
+                             'target_timestamps.txt is reused as the FIXED time grid. Only the '
+                             'configured (new) topics are extracted, index-aligned 1:1 with that tree; '
+                             'the cross-topic sync filter, target_timestamps.txt, tf/ and sync_plot are '
+                             'NOT recomputed/written (existing groups are untouched). Use to add a '
+                             'modality later without re-extracting or re-syncing what is already there.')
+    parser.add_argument('--time-window', dest='time_window', type=float, nargs=2, default=None,
+                        metavar=('T_START', 'T_END'),
+                        help='only read bag messages within [T_START, T_END] (seconds, same epoch as the '
+                             'data timestamps). Pushed down into the rosbags reader as a time-bounded '
+                             '(index-based) read, so the whole bag is never scanned/decoded — useful for '
+                             'extracting a handful of frames from a large bag. Also clamps the sync grid '
+                             '(and, with --align_to, filters the reused grid) to the window.')
     args = parser.parse_args()
+
+    # ns bounds for time-bounded rosbags reads (None => unbounded). rosbags reader start/stop act on the
+    # bag record time; the sync grid clamp below uses the same seconds window on the data-timestamp clock.
+    win_start_ns = int(args.time_window[0] * 1e9) if args.time_window else None
+    win_stop_ns = int(args.time_window[1] * 1e9) if args.time_window else None
 
     if os.path.exists(args.dst_dir) and not args.force:
         x = input('{} exists. Overwrite? [Y/n]'.format(args.dst_dir))
@@ -173,9 +206,17 @@ if __name__ == '__main__':
 
         assert check_connections(connections, target_topics), "missing topics"
 
-        queue = setup_queue(reader, config)
+        target_times_override = None
+        if args.align_to:
+            _grid_fp = os.path.join(args.align_to, 'target_timestamps.txt')
+            target_times_override = np.loadtxt(_grid_fp)
+            print('align_to: reusing {} target times from {}'.format(
+                len(np.atleast_1d(target_times_override)), _grid_fp))
+        queue = setup_queue(reader, config, target_times_override=target_times_override,
+                             window=args.time_window)
 
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
+        for connection, timestamp, rawdata in reader.messages(connections=connections,
+                                                              start=win_start_ns, stop=win_stop_ns):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
 
@@ -214,14 +255,17 @@ if __name__ == '__main__':
     if not has_calib_file:
         print('no calib file provided. Note that for Yamaha data this is probably wrong!')
 
-    if args.skip_tf:
-        print('Skipping TF processing as requested...')
+    if args.skip_tf or args.align_to:
+        print('Skipping TF processing{}...'.format(' (align_to: reuse existing tree tf)' if args.align_to else ' as requested'))
         tf_manager = None
         tf_tmin = -np.inf
         tf_tmax = np.inf
     else:
         print('handling tf...')
-        tf_manager = TfManager.from_rosbag(args.src_dir, device='cuda', ros1=ros1)
+        # auto-detect device so this runs on CPU-only boxes (parv-dev-cpu) as well as GPU boxes
+        import torch as _torch
+        _tf_device = 'cuda' if _torch.cuda.is_available() else 'cpu'
+        tf_manager = TfManager.from_rosbag(args.src_dir, device=_tf_device, ros1=ros1)
 
         if has_calib_file:
             tf_manager.update_from_calib_config(calib_config)
@@ -231,25 +275,35 @@ if __name__ == '__main__':
     ##  do some proc to get consecutive segments
     all_valid_mask = np.ones(len(queue['target_times']), dtype=bool)
 
-    for topic, err in queue['topic_error'].items():
-        all_valid_mask = all_valid_mask & (err < config['interp_tol'])
+    if args.align_to:
+        # Additive mode: keep the existing fixed grid as-is (no cross-topic filtering / re-indexing).
+        # Grid points where the new modality has no sample within interp_tol stay -1 in topic_times
+        # and simply get no frame written (a gap at that index), preserving 1:1 index alignment with
+        # the existing tree. Do NOT (re)write target_timestamps.txt (don't clobber the existing tree).
+        print('align_to: keeping all {} fixed grid points; no cross-topic sync filtering.'.format(
+            len(queue['target_times'])))
+    else:
+        for topic, err in queue['topic_error'].items():
+            all_valid_mask = all_valid_mask & (err < config['interp_tol'])
 
-    for topic, times in queue['topic_times'].items():
-        all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
+        for topic, times in queue['topic_times'].items():
+            all_valid_mask = all_valid_mask & (times > tf_tmin) & (times < tf_tmax)
 
-    assert all_valid_mask.any(), "topics not sync'ed!"
+        assert all_valid_mask.any(), "topics not sync'ed!"
 
-    queue['target_times'] = queue['target_times'][all_valid_mask]
+        queue['target_times'] = queue['target_times'][all_valid_mask]
 
-    for topic in queue['topic_times'].keys():
-        queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
-        queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
+        for topic in queue['topic_times'].keys():
+            queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
+            queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
-    print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+        print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
+
     n_frames = all_valid_mask.shape[0]
 
     os.makedirs(args.dst_dir, exist_ok=True)
-    np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
+    if not args.align_to:
+        np.savetxt(os.path.join(args.dst_dir, 'target_timestamps.txt'), queue['target_times'])
 
     ## setup folder structure/populate timestamps
     for cvt_config in cvt_info.values():
@@ -268,29 +322,31 @@ if __name__ == '__main__':
         print('TF TREE:\n')
         print(tf_manager.tf_tree)
 
-    plt.plot(queue['target_times'], marker='.', label='target_times')
+    # Additive mode reuses the existing tree's grid -> don't (re)write the sync plot for it.
+    if not args.align_to:
+        plt.plot(queue['target_times'], marker='.', label='target_times')
 
-    x = np.arange(len(queue['target_times']))
+        x = np.arange(len(queue['target_times']))
 
-    if tf_manager is not None:
-        if tf_tmin > 0.:
-            idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
-            plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
+        if tf_manager is not None:
+            if tf_tmin > 0.:
+                idx = queue['target_times'][queue['target_times'] > tf_tmin].argmin()
+                plt.axvline(idx, color='r', label='Tf tmin (idx {})'.format(idx))
 
-        if tf_tmax < 1e16:
-            idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
-            plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
+            if tf_tmax < 1e16:
+                idx = queue['target_times'][queue['target_times'] < tf_tmax].argmax()
+                plt.axvline(idx, color='r', label='Tf tmax (idx {})'.format(idx))
 
-    for topic in target_topics:
-        times = queue['topic_times'][topic]
-        error = queue['topic_error'][topic]
-        mask = error < config['interp_tol']
-        plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
+        for topic in target_topics:
+            times = queue['topic_times'][topic]
+            error = queue['topic_error'][topic]
+            mask = error < config['interp_tol']
+            plt.plot(x[mask], queue['topic_times'][topic][mask], marker='.', label="{} ({} bad)".format(topic, len(mask) - mask.sum()))
 
-    plt.title('time sync graph')
-    plt.legend()
+        plt.title('time sync graph')
+        plt.legend()
 
-    plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
+        plt.savefig(os.path.join(args.dst_dir, 'sync_plot.png'), dpi=300)
 
     #save tf
     if tf_manager is not None:
@@ -315,7 +371,8 @@ if __name__ == '__main__':
             if camera_info_topics:
                 print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
                 camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
-                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
+                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections,
+                                                                      start=win_start_ns, stop=win_stop_ns):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     # Convert to CameraInfoTorch for rectification
                     camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
@@ -328,7 +385,19 @@ if __name__ == '__main__':
 
         assert check_connections(connections, target_topics), "missing topics"
 
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
+        # camera_info topics whose sibling image is rectified at extraction -> their stored
+        # calibration must use the rectified convention (D=0, K=P[:3,:3], R=I) so the metadata
+        # matches the undistorted pixels (mirrors the image-rectify gate below).
+        _RECTIFIABLE = ('CompressedImage', 'Thermal16bitCompressedImage')
+        rectified_info_topics = set()
+        if args.rectify:
+            for _e in cvt_info.values():
+                if _e['msgtype'] in _RECTIFIABLE and _e.get('rectify', True):
+                    _base = _e['topic'].replace('/image_raw/compressed', '').replace('/image/compressed', '').replace('/compressed', '')
+                    rectified_info_topics.add(_base + '/camera_info')
+
+        for connection, timestamp, rawdata in reader.messages(connections=connections,
+                                                              start=win_start_ns, stop=win_stop_ns):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
             cinfo_to_update = [(k,v) for k,v in cvt_info.items() if v['topic'] == topic]
@@ -377,6 +446,11 @@ if __name__ == '__main__':
                     else:
                         torch_data = torch_dtype.from_rosmsg(msg)
 
+                    # If this is a camera_info whose sibling image was rectified, store it in the
+                    # rectified convention so the calibration matches the undistorted pixels.
+                    if _cinfo['msgtype'] == 'CameraInfo' and topic in rectified_info_topics:
+                        torch_data = torch_data.as_rectified()
+
                     for idx in idxs:
                         torch_data.to_kitti(base_dir, idx)
                         pbars[_ckey].n = idx
@@ -396,11 +470,15 @@ if __name__ == '__main__':
             cvt_type.to_interp(base_dir, interp_data)
 
 
-    ## check that all idxs got filled
-    checks = {k:np.sort(np.concatenate(v)) for k,v in checks.items()}
+    ## check that all idxs got filled (diagnostic only — must not raise; with --align_to + a time window
+    ## some grid points legitimately have no sample (a gap), so the filled set is a subset of the grid).
+    checks = {k: (np.sort(np.concatenate(v)) if len(v) else np.array([], dtype=int))
+              for k, v in checks.items()}
 
     print('Done processing {} frames.'.format(queue['target_times'].shape[0]))
 
     for topic, idxs in checks.items():
-        valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
-        print('{} has all frames: {}'.format(topic, valid), flush=True)
+        uniq = np.unique(idxs)
+        expected = np.arange(all_valid_mask.sum())
+        valid = (uniq.shape == expected.shape) and bool(np.all(uniq == expected))
+        print('{} has all frames: {} ({}/{})'.format(topic, valid, len(uniq), len(expected)), flush=True)

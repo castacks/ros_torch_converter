@@ -53,12 +53,18 @@ def group_color(group):
 def apply_color(color, text):
     return f"{color}{text}{RESET}" if color else text
 
-def setup_queue(reader, topics, dt):
+def setup_queue(reader, topics, dt, window=None):
     """
-    Initialize message queues based on config
+    Initialize message queues based on config.
+
+    window: optional (t_start, t_end) in seconds; clamps the arange grid to the window so extraction is
+    scoped to a time window (pairs with the reader's start/stop bounds).
     """
     start_time = reader.start_time * 1e-9
     end_time = reader.end_time * 1e-9
+    if window is not None:
+        start_time = max(start_time, window[0])
+        end_time = min(end_time, window[1])
 
     target_times = np.arange(start_time, end_time, dt)
 
@@ -229,6 +235,11 @@ def process_cvt_entry_wrapper(args_tuple):
     typestore = get_typestore(Stores.ROS2_HUMBLE)
     checks = []
 
+    # time-window bounds (ns) for a bounded read, from the shared parsed_args (None => unbounded)
+    _tw = getattr(parsed_args, 'time_window', None)
+    win_start_ns = int(_tw[0] * 1e9) if _tw else None
+    win_stop_ns = int(_tw[1] * 1e9) if _tw else None
+
     # note that behavior is non-deterministic if a topic has multiple msgs with the same timestamp
     try:
         with AnyReader([bagpath], default_typestore=typestore) as reader:
@@ -244,7 +255,8 @@ def process_cvt_entry_wrapper(args_tuple):
             processed_count = 0
             interp_buf = []
 
-            for conn, timestamp, rawdata in reader.messages(connections=matching_connections):
+            for conn, timestamp, rawdata in reader.messages(connections=matching_connections,
+                                                            start=win_start_ns, stop=win_stop_ns):
                 try:
                     msg = reader.deserialize(rawdata, conn.msgtype)
                 except Exception:
@@ -332,7 +344,16 @@ if __name__ == '__main__':
     parser.add_argument('--rectify', action='store_true', help='set this flag to rectify compressed images using camera_info (requires camera_info topics in bag)')
     parser.add_argument('--num_workers', type=str, default=None, help='number of parallel workers (default: min of entries and CPU cores, or "max" to use all CPU cores)')
     parser.add_argument('--color', action='store_true', help='use colored output for different topics')
+    parser.add_argument('--time-window', dest='time_window', type=float, nargs=2, default=None,
+                        metavar=('T_START', 'T_END'),
+                        help='only read bag messages within [T_START, T_END] (seconds). Pushed down into '
+                             'the rosbags reader as a time-bounded (index-based) read so the whole bag is '
+                             'never scanned/decoded, and clamps the sync grid to the window.')
     args = parser.parse_args()
+
+    # ns bounds for time-bounded rosbags reads (None => unbounded); see ros2bag_2_kitti.py.
+    win_start_ns = int(args.time_window[0] * 1e9) if args.time_window else None
+    win_stop_ns = int(args.time_window[1] * 1e9) if args.time_window else None
 
     if os.path.exists(args.dst_dir) and not args.force:
         x = input('\n{} exists. Overwrite? [Y/n] '.format(args.dst_dir))
@@ -408,9 +429,10 @@ if __name__ == '__main__':
         # Do not add topics with 0 count to the queue, else sync issues
         connections = [x for x in reader.connections if x.msgcount > 0 and x.topic in target_topics]
 
-        queue = setup_queue(reader, list(target_topics), config['dt'])
+        queue = setup_queue(reader, list(target_topics), config['dt'], window=args.time_window)
 
-        for connection, timestamp, rawdata in reader.messages(connections=connections):
+        for connection, timestamp, rawdata in reader.messages(connections=connections,
+                                                              start=win_start_ns, stop=win_stop_ns):
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
 
@@ -551,7 +573,8 @@ if __name__ == '__main__':
             if camera_info_topics:
                 print(f"Caching camera_info from {len(camera_info_topics)} topics for rectification...")
                 camera_info_connections = [x for x in reader.connections if x.topic in camera_info_topics]
-                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections):
+                for connection, timestamp, rawdata in reader.messages(connections=camera_info_connections,
+                                                                      start=win_start_ns, stop=win_stop_ns):
                     msg = reader.deserialize(rawdata, connection.msgtype)
                     camera_info_torch = CameraInfoTorch.from_rosmsg(msg, device='cpu')
                     camera_info_cache[connection.topic] = camera_info_torch

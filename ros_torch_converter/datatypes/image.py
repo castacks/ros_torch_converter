@@ -539,6 +539,41 @@ class CompressedThermal16bitImageTorch(Thermal16bitImageTorch):
         return res
 
 
+class Thermal8bitImageTorch(Thermal16bitImageTorch):
+    """8-bit [0-255] thermal delivered as an uncompressed mono8 sensor_msgs/Image.
+
+    Some older crl_rzr data (e.g. racer-jpl9 san-gabriel) publishes thermal as a raw
+    mono8 Image on /crl_rzr/flir_adk/image_raw instead of the PNG-compressed 16-bit
+    radiometric stream (raw thermal is otherwise always 16-bit). This type keeps the
+    data 8-bit and writes a single-channel 8-bit PNG, so downstream code reads the true
+    depth. from_kitti (inherited) uses IMREAD_UNCHANGED, so it round-trips as 8-bit.
+    Do NOT use this for genuine 16-bit thermal -- use Thermal16bitImage(Compressed).
+    """
+    from_rosmsg_type = Image
+
+    def from_rosmsg(msg, device='cpu'):
+        res = Thermal8bitImageTorch(device)
+        img = res.bridge.imgmsg_to_cv2(msg, desired_encoding='passthrough')
+        if img.ndim == 2:
+            img = img[..., np.newaxis]
+        elif img.ndim == 3:
+            img = img[..., :1]
+        res.image = torch.from_numpy(img.astype(np.float32)).to(device)
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    def to_kitti(self, base_dir, idx):
+        '''Save 8-bit thermal as a single-channel 8-bit PNG.'''
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+        save_fp = os.path.join(base_dir, "{:08d}.png".format(idx))
+        img_np = self.image.cpu().numpy().astype(np.uint8)
+        if img_np.shape[-1] == 1:
+            img_np = img_np.squeeze(-1)
+        cv2.imwrite(save_fp, img_np, [cv2.IMWRITE_PNG_COMPRESSION, 0])
+
+
 class FeatureImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for feature images

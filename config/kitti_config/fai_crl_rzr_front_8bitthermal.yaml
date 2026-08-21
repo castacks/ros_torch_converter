@@ -7,15 +7,12 @@
 # (DepthImage) is already rectified in the left frame and is left untouched. TF (/tf,/tf_static) is
 # auto-extracted by TfManager (no topic entry).
 #
-# Sync grid: dt=0.4s (~2.5Hz), the DEFAULT thermal-rate grid. The FLIR ADK thermal runs ~2Hz
-# (~0.5s period) and the alignment step de-duplicates thermal by stamp (unique_by_stamp), so a fast
-# grid (the old dt=0.1 / 10Hz) only wrote ~5x redundant thermal frames it then discarded. dt=0.4 sits
-# JUST BELOW the ~0.5s thermal period, so every thermal frame is still captured (no aliasing/drops)
-# with ~4x fewer frames to decode+write. CAVEAT: keep dt below the thermal inter-frame period; if a
-# rig's thermal is slower/faster, retune dt (and interp_tol) accordingly. The aligner re-matches the
-# nearest RGB/depth to each thermal stamp from the per-topic timestamps, independent of dt.
+# Sync grid: dt=0.1s (= RGB/depth ~10Hz native rate) gives tight RGB<->thermal pairing;
+# thermal (~2Hz) is held forward up to interp_tol. The alignment step re-matches the nearest
+# RGB/depth to each unique thermal stamp using the per-topic timestamps, so duplication of the
+# slow thermal stream across grid points is harmless.
 
-dt: 0.4
+dt: 0.1
 interp_tol: 0.6           # >= thermal inter-frame gap (~0.5s) so thermal is held across the grid
 backward_interpolation: false
 
@@ -23,8 +20,8 @@ topics:
   # ---- Thermal (FLIR ADK) ----
   - name: thermal
     group: flir_adk
-    topic: /crl_rzr/flir_adk/image_raw/compressed
-    type: Thermal16bitCompressedImage   # 16-bit-preserving (mono16 png)
+    topic: /crl_rzr/flir_adk/image_raw
+    type: Thermal8bitImage   # older mono8 stream; saved as single-channel 8-bit png
     rectify: false                      # keep thermal RAW; rectify later (fai_extractor rectify) if needed
     max_age: 1.
     args: {}
