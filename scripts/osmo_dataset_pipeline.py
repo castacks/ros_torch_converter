@@ -240,13 +240,20 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager
     return sorted(run_dirs), needs_reindex
 
 
+def dataset_relpath(relpath):
+    """Destination-side relpath for a run-dir: bags recorded as `<run>/rosbags/*.mcap`
+    put their dataset at `<run>/`, not `<run>/rosbags/`"""
+    parent, name = os.path.split(relpath.rstrip("/"))
+    return parent if name == "rosbags" and parent else relpath
+
+
 def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
     """Drop run-dirs that already have a completed KITTI dataset at the destination."""
     if stager:
         return [relpath for relpath in run_dirs
-                if not stager.exists(os.path.join(dst_dir, relpath))]
+                if not stager.exists(os.path.join(dst_dir, dataset_relpath(relpath)))]
     return [relpath for relpath in run_dirs
-            if not is_kitti_dir(os.path.join(data_dir, dst_dir, relpath))]
+            if not is_kitti_dir(os.path.join(data_dir, dst_dir, dataset_relpath(relpath)))]
 
 
 def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None):
@@ -307,7 +314,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
                                     record_drain=record_drain, **reann_kwargs)
         copy_bag_metadata(orig_dir, merged_dir)
 
-        out_dir = os.path.join(kitti_out_root, relpath)
+        out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
         os.makedirs(out_dir, exist_ok=True)
         print(f"[reannotate] {relpath}: writing message-count report + sync viz ...", flush=True)
         report_rows = build_report(orig_dir, merged_dir)
@@ -342,7 +349,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
                 local_out_dir, converter_workers, merged_bag_dir=None,
                 orig_bag_dir=None, merged_scratch_dir=None, prestaged_dir=None):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
-    out_dir = os.path.join(kitti_out_root, relpath)
+    out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
     os.makedirs(out_dir, exist_ok=True)
 
     try:
@@ -406,7 +413,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         report_rows = build_report(report_original_dir, merged_bag_dir, kitti_dir=out_dir)
         write_report(report_rows, os.path.join(out_dir, "dataset_report"))
 
-        dst_relpath = os.path.join(dst_dir, relpath)
+        dst_relpath = os.path.join(dst_dir, dataset_relpath(relpath))
         if stager:
             print(f"[convert] {relpath}: copying result to {stager.remote}:{dst_relpath} ...", flush=True)
             stager.copy_out(out_dir, dst_relpath)
