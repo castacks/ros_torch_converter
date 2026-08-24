@@ -20,6 +20,7 @@ from ros_torch_converter.datatypes.image import (
 from ros_torch_converter.datatypes.intrinsics import IntrinsicsTorch, CameraInfoTorch
 from ros_torch_converter.datatypes.pointcloud import (
     PointCloudTorch,
+    PointCloudWithTimeTorch,
     FeaturePointCloudTorch,
 )
 from ros_torch_converter.datatypes.transform import TransformTorch, OdomTransformTorch
@@ -55,6 +56,7 @@ str_to_cvt_class = {
     "Intrinsics": IntrinsicsTorch,
     "CameraInfo": CameraInfoTorch,
     "PointCloud": PointCloudTorch,
+    "PointCloudWithTime": PointCloudWithTimeTorch,
     "FeaturePointCloud": FeaturePointCloudTorch,
     "Transform": TransformTorch,
     "OdomTransform": OdomTransformTorch,
