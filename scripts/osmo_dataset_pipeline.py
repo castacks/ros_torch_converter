@@ -18,7 +18,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 import yaml
 
-from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, is_rosbag_dir_filenames, load_yaml
+from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, load_yaml
 from tartandriver_utils.rclone_stager import RcloneStager
 
 from headless_bag_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
@@ -126,37 +126,118 @@ def repair_bag_storage_identifier(bag_dir, relpath=""):
         yaml.safe_dump(metadata, f, sort_keys=False)
 
 
+def bag_metadata_is_valid(bag_dir):
+    """True iff bag_dir holds a metadata.yaml that parses into rosbag2 bag info."""
+    meta_path = os.path.join(bag_dir, "metadata.yaml")
+    if not os.path.exists(meta_path) or os.path.getsize(meta_path) == 0:
+        return False
+    try:
+        with open(meta_path, "r") as f:
+            metadata = yaml.safe_load(f)
+    except yaml.YAMLError:
+        return False
+    return isinstance(metadata, dict) and "rosbag2_bagfile_information" in metadata
+
+
+def reindex_bag(bag_dir, relpath=""):
+    """Rebuild a bag's metadata.yaml from its storage files with `ros2 bag reindex`.
+    """
+    storage_files = sorted(f for f in os.listdir(bag_dir)
+                           if os.path.splitext(f)[1] in STORAGE_ID_BY_EXT)
+    # get rid of any 0-byte storage files, which ros2 bag reindex will choke on
+    empty = [f for f in storage_files if os.path.getsize(os.path.join(bag_dir, f)) == 0]
+    for name in empty:
+        print(f"[reindex] {relpath}: dropping 0-byte {name}", flush=True)
+        os.remove(os.path.join(bag_dir, name))
+    storage_files = [f for f in storage_files if f not in empty]
+    if not storage_files:
+        raise RuntimeError("no non-empty storage files to reindex")
+
+    storage_ids = {STORAGE_ID_BY_EXT[os.path.splitext(f)[1]] for f in storage_files}
+    if len(storage_ids) != 1:
+        raise RuntimeError(f"mixed storage formats {sorted(storage_ids)}, "
+                           "cannot pick a --storage-id for reindex")
+    storage_id = next(iter(storage_ids))
+
+    # A 0-byte metadata.yaml would be read as the bag's index; it holds nothing, so
+    # remove it and let reindex write a fresh one in its place.
+    meta_path = os.path.join(bag_dir, "metadata.yaml")
+    if os.path.exists(meta_path):
+        os.remove(meta_path)
+
+    print(f"[reindex] {relpath}: rebuilding metadata.yaml from {len(storage_files)} "
+          f"{storage_id} file(s) ...", flush=True)
+    result = subprocess.run(["ros2", "bag", "reindex", bag_dir, "-s", storage_id],
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"`ros2 bag reindex` exited with {result.returncode}:\n"
+                           f"{result.stdout.strip()}")
+    if not bag_metadata_is_valid(bag_dir):
+        raise RuntimeError("`ros2 bag reindex` reported success but wrote no usable "
+                           f"metadata.yaml:\n{result.stdout.strip()}")
+    print(f"[reindex] {relpath}: metadata.yaml rebuilt", flush=True)
+
+
+def repair_bag_metadata(bag_dir, relpath=""):
+    """Make a staged bag readable: rebuild metadata.yaml if it's missing or empty, then
+    backfill an empty storage_identifier. Raises if the bag can't be repaired. Idempotent,
+    so it's safe to call again on an already-repaired dir."""
+    if not bag_metadata_is_valid(bag_dir):
+        reindex_bag(bag_dir, relpath)
+    repair_bag_storage_identifier(bag_dir, relpath)
+
+
 def local_lsdir_recursive(root_dir):
     """Local-filesystem equivalent of RcloneStager.list(), for full-copy (data_dir) mode."""
     entries = []
     for dirpath, dirnames, filenames in os.walk(root_dir):
         relpath = os.path.relpath(dirpath, root_dir)
         for name in filenames:
-            entries.append({"IsDir": False, "Path": os.path.normpath(os.path.join(relpath, name))})
+            full = os.path.join(dirpath, name)
+            entries.append({
+                "IsDir": False,
+                "Path": os.path.normpath(os.path.join(relpath, name)),
+                "Size": os.path.getsize(full) if os.path.exists(full) else 0,
+            })
     return entries
 
 
 def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager=None, data_dir=None):
-    """Find run-dirs under root_dir with metadata.yaml + >=1 .mcap, at any depth."""
+    """Find run-dirs under root_dir with >=1 non-empty .mcap, at any depth.
+
+    Returns (run_dirs, needs_reindex): `needs_reindex` is the subset whose metadata.yaml
+    is missing or 0-byte, which the caller must stage and `reindex_bag()` before use.
+    This relaxes `is_rosbag_dir_filenames`, which requires metadata.yaml to be present --
+    it can be rebuilt from the .mcap files, so its absence doesn't disqualify a run-dir.
+    """
     entries = stager.list(root_dir) if stager else local_lsdir_recursive(os.path.join(data_dir, root_dir))
 
-    filenames_by_dir = {}
+    sizes_by_dir = {}
     for entry in entries:
         if entry["IsDir"]:
             continue
         parent = os.path.dirname(entry["Path"])
-        filenames_by_dir.setdefault(parent, []).append(os.path.basename(entry["Path"]))
+        sizes_by_dir.setdefault(parent, {})[os.path.basename(entry["Path"])] = entry.get("Size", 0)
 
-    run_dirs = []
-    for relpath, filenames in filenames_by_dir.items():
+    run_dirs, needs_reindex = [], set()
+    for relpath, sizes in sizes_by_dir.items():
         if limit_subfolder is not None and relpath != limit_subfolder:
             continue
         if any(part in exclude_subdirs for part in relpath.split("/")):
             continue
-        if is_rosbag_dir_filenames(filenames):
-            run_dirs.append(relpath)
+        if not any(name.endswith(".mcap") and size > 0 for name, size in sizes.items()):
+            continue
+        if not sizes.get("metadata.yaml", 0):
+            needs_reindex.add(relpath)
+        run_dirs.append(relpath)
 
-    return sorted(run_dirs)
+    if needs_reindex:
+        print(f"[discovery] {len(needs_reindex)} run-dir(s) have no usable metadata.yaml "
+              f"(aborted recording) -- will reindex:", flush=True)
+        for relpath in sorted(needs_reindex):
+            print(f"    {relpath}", flush=True)
+
+    return sorted(run_dirs), needs_reindex
 
 
 def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
@@ -168,40 +249,52 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
             if not is_kitti_dir(os.path.join(data_dir, dst_dir, relpath))]
 
 
-def classify_reannotation_needed(relpaths, root_dir, stager, data_dir):
-    """Subset of `relpaths` whose raw bag is missing super_odometry, checked via
-    metadata.yaml only (no full-bag download) so phase 1 only stages bags it will
-    actually reannotate."""
-    needed = []
+def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None):
+    """Split `relpaths` into (needs_reannotation, unreadable): bags whose raw metadata.yaml
+    is missing super_odometry, and bags whose metadata.yaml couldn't be read at all.
+    Checked via metadata.yaml only (no full-bag download) so phase 1 only stages bags it
+    will actually reannotate -- except for bags in `prestaged`, which the reindex phase
+    already staged in full and whose rebuilt metadata is read straight off disk."""
+    prestaged = prestaged or {}
+    needed, unreadable = [], []
     for relpath in relpaths:
-        if stager:
-            tmpdir = tempfile.mkdtemp(prefix="osmo_pipeline_meta_")
-            try:
+        tmpdir = None
+        try:
+            if relpath in prestaged:
+                bag_dir = prestaged[relpath]
+            elif stager:
+                tmpdir = tempfile.mkdtemp(prefix="osmo_pipeline_meta_")
                 stager.copy_in(os.path.join(root_dir, relpath, "metadata.yaml"), tmpdir)
-                if not bag_has_superodometry(tmpdir):
-                    needed.append(relpath)
-            finally:
-                shutil.rmtree(tmpdir, ignore_errors=True)
-        else:
-            bag_dir = os.path.join(data_dir, root_dir, relpath)
+                bag_dir = tmpdir
+            else:
+                bag_dir = os.path.join(data_dir, root_dir, relpath)
             if not bag_has_superodometry(bag_dir):
                 needed.append(relpath)
-    return needed
+        except Exception as e:
+            # One unreadable metadata.yaml must not take down the whole batch.
+            print(f"[reannotate] SKIP {relpath}: cannot read metadata.yaml: {e}", flush=True)
+            unreadable.append((relpath, str(e)))
+        finally:
+            if tmpdir:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+    return needed, unreadable
 
 
 def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_scratch_root,
                    dst_dir, pipeline_config, reannotate_config, reannotated_dir, record_drain,
-                   domain_queue, stager, data_dir):
+                   domain_queue, stager, data_dir, prestaged_dir=None):
     domain_id = None
     try:
-        if stager:
+        if prestaged_dir:
+            orig_dir = prestaged_dir
+        elif stager:
             orig_dir = os.path.join(orig_scratch_root, relpath)
             os.makedirs(orig_dir, exist_ok=True)
             print(f"[reannotate] {relpath}: copying raw bag from {stager.remote} ...", flush=True)
             stager.copy_in(os.path.join(root_dir, relpath), orig_dir)
         else:
             orig_dir = os.path.join(data_dir, root_dir, relpath)
-        repair_bag_storage_identifier(orig_dir, relpath)
+        repair_bag_metadata(orig_dir, relpath)
 
         if domain_queue is not None:
             domain_id = domain_queue.get()
@@ -247,7 +340,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video, video_config, kitti_out_root, stager, data_dir,
                 local_out_dir, converter_workers, merged_bag_dir=None,
-                orig_bag_dir=None, merged_scratch_dir=None):
+                orig_bag_dir=None, merged_scratch_dir=None, prestaged_dir=None):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_out_root, relpath)
     os.makedirs(out_dir, exist_ok=True)
@@ -256,6 +349,9 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         if merged_bag_dir:
             print(f"[convert] {relpath}: using bag reannotated in phase 1 ...", flush=True)
             src_dir = merged_bag_dir
+        elif prestaged_dir:
+            print(f"[convert] {relpath}: using bag staged + reindexed earlier in this batch ...", flush=True)
+            src_dir = prestaged_dir
         elif stager:
             print(f"[convert] {relpath}: copying raw bag from {stager.remote} ...", flush=True)
             stager.copy_in(os.path.join(root_dir, relpath), scratch_dir)
@@ -263,7 +359,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         else:
             src_dir = os.path.join(data_dir, root_dir, relpath)
         if not merged_bag_dir:  # merge_bags() output always has a valid storage_identifier
-            repair_bag_storage_identifier(src_dir, relpath)
+            repair_bag_metadata(src_dir, relpath)
 
         sync_viz_csv_path = os.path.join(out_dir, "topic_sync_viz.csv")
         if not os.path.exists(sync_viz_csv_path):  # phase 1 (reannotate) may have already written it
@@ -327,6 +423,8 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         # reannotate_one); in data_dir mode it's the caller's real source data.
         if orig_bag_dir and stager:
             shutil.rmtree(orig_bag_dir, ignore_errors=True)
+        if prestaged_dir and stager and not merged_bag_dir:
+            shutil.rmtree(prestaged_dir, ignore_errors=True)
         if merged_scratch_dir:
             shutil.rmtree(merged_scratch_dir, ignore_errors=True)
         if not local_out_dir:  # keep the dataset when a known output dir was requested
@@ -409,8 +507,9 @@ def main():
 
     scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
-    run_dirs = find_rosbag_run_dirs(args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder,
-                                     stager=stager, data_dir=args.data_dir)
+    run_dirs, needs_reindex = find_rosbag_run_dirs(
+        args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder,
+        stager=stager, data_dir=args.data_dir)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
     pending = filter_unconverted(run_dirs, args.dst_dir, stager=stager, data_dir=args.data_dir)
@@ -462,10 +561,51 @@ def main():
         if len(batches) > 1:
             print(f"\n[batch] {batch_num}/{len(batches)}: {len(batch)} bag(s)")
 
+        prestaged = {}
+        batch_reindex = [relpath for relpath in batch if relpath in needs_reindex]
+        for relpath in batch_reindex:
+            reindex_start = time.time()
+            if stager:
+                bag_dir = os.path.join(orig_scratch_root, relpath)
+                os.makedirs(bag_dir, exist_ok=True)
+            else:
+                bag_dir = os.path.join(args.data_dir, args.root_dir, relpath)
+            try:
+                if stager:
+                    print(f"[reindex] {relpath}: copying raw bag from {stager.remote} ...", flush=True)
+                    stager.copy_in(os.path.join(args.root_dir, relpath), bag_dir)
+                repair_bag_metadata(bag_dir, relpath)
+                if stager:
+                    prestaged[relpath] = bag_dir
+            except Exception as e:
+                print(f"[reindex] FAIL {relpath}: {e}", flush=True)
+                failed.append(relpath)
+                summary.append({
+                    "relpath": relpath, "phase": "reindex",
+                    "status": "fail", "reason": str(e),
+                    "duration_s": round(time.time() - reindex_start, 1),
+                })
+                if stager:
+                    shutil.rmtree(bag_dir, ignore_errors=True)
+        if batch_reindex:
+            flush_summary()
+
+        remaining = [relpath for relpath in batch if relpath not in failed]
+
         merged_by_relpath = {}
-        if reannotate:
-            needs_reannotation = classify_reannotation_needed(batch, args.root_dir, stager, args.data_dir)
-            print(f"[reannotate] {len(needs_reannotation)}/{len(batch)} bag(s) in this "
+        if reannotate and remaining:
+            needs_reannotation, unreadable = classify_reannotation_needed(
+                remaining, args.root_dir, stager, args.data_dir, prestaged)
+            for relpath, err in unreadable:
+                failed.append(relpath)
+                summary.append({
+                    "relpath": relpath, "phase": "reannotate",
+                    "status": "fail", "reason": f"unreadable metadata.yaml: {err}",
+                    "duration_s": 0.0,
+                })
+            if unreadable:
+                flush_summary()
+            print(f"[reannotate] {len(needs_reannotation)}/{len(remaining)} bag(s) in this "
                   f"batch need reannotation")
             if needs_reannotation:
                 submit_times = {}
@@ -479,6 +619,7 @@ def main():
                             orig_scratch_root, merged_scratch_root, args.dst_dir,
                             args.pipeline_config, reannotate_config, reannotated_dir,
                             record_drain, domain_queue, stager, args.data_dir,
+                            prestaged.get(relpath),
                         )] = relpath
                     for future in as_completed(futures):
                         relpath, ok, err, merged_dir = future.result()
@@ -520,7 +661,7 @@ def main():
                         args.pipeline_config, converter_extra_args,
                         render_video, video_config, kitti_out_root,
                         stager, args.data_dir, args.local_out_dir, converter_workers,
-                        merged_dir, orig_dir, merged_scratch_dir,
+                        merged_dir, orig_dir, merged_scratch_dir, prestaged.get(relpath),
                     )] = relpath
                 for future in as_completed(futures):
                     relpath, ok, err, kept_frames = future.result()

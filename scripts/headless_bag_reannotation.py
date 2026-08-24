@@ -87,8 +87,14 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
 
 def bag_topics(bag_dir):
     """Return {topic_name: message_count} parsed from a run-dir's metadata.yaml."""
-    with open(os.path.join(bag_dir, "metadata.yaml"), "r") as f:
+    meta_path = os.path.join(bag_dir, "metadata.yaml")
+    with open(meta_path, "r") as f:
         metadata = yaml.safe_load(f)
+    if not isinstance(metadata, dict) or "rosbag2_bagfile_information" not in metadata:
+        raise ValueError(
+            f"{meta_path} is empty or malformed (no 'rosbag2_bagfile_information') -- "
+            "the recording likely never shut down cleanly, so this bag is unusable"
+        )
     info = metadata["rosbag2_bagfile_information"]
     return {
         t["topic_metadata"]["name"]: t["message_count"]
