@@ -28,3 +28,11 @@
   max_age: 1.
   parallel_workers: 4
   args: {}
+
+- name: roughness
+  group: traversability
+  topic: /traversability_cost
+  type: Float32
+  max_age: 1.
+  optional: true
+  args: {}

@@ -29,3 +29,11 @@
   max_age: 1.
   optional: true
   args: {}
+
+- name: waypoints
+  topic: /next_waypoints/odom
+  type: GoalArray
+  group: autonomy
+  max_age: 1000000000000000.
+  optional: true
+  args: {}
