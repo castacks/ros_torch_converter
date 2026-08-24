@@ -202,6 +202,21 @@ def local_lsdir_recursive(root_dir):
     return entries
 
 
+def split_exclusions(exclude_subdirs):
+    """Split raw `exclude_subdirs` entries into (names, prefixes)."""
+    names = {e for e in exclude_subdirs if "/" not in e}
+    prefixes = {e.strip("/") for e in exclude_subdirs if "/" in e}
+    return names, {p for p in prefixes if p}
+
+
+def is_excluded(relpath, exclude_names, exclude_prefixes):
+    """Matched prefix (or True for a name match) if `relpath` is excluded, else None."""
+    if any(part in exclude_names for part in relpath.split("/")):
+        return True
+    return next((p for p in exclude_prefixes
+                 if relpath == p or relpath.startswith(p + "/")), None)
+
+
 def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager=None, data_dir=None):
     """Find run-dirs under root_dir with >=1 non-empty .mcap, at any depth.
 
@@ -219,17 +234,30 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager
         parent = os.path.dirname(entry["Path"])
         sizes_by_dir.setdefault(parent, {})[os.path.basename(entry["Path"])] = entry.get("Size", 0)
 
+    exclude_names, exclude_prefixes = split_exclusions(exclude_subdirs)
+    matched_prefixes = set()
+
     run_dirs, needs_reindex = [], set()
     for relpath, sizes in sizes_by_dir.items():
         if limit_subfolder is not None and relpath != limit_subfolder:
             continue
-        if any(part in exclude_subdirs for part in relpath.split("/")):
+        excluded = is_excluded(relpath, exclude_names, exclude_prefixes)
+        if excluded:
+            if excluded is not True:
+                matched_prefixes.add(excluded)
             continue
         if not any(name.endswith(".mcap") and size > 0 for name, size in sizes.items()):
             continue
         if not sizes.get("metadata.yaml", 0):
             needs_reindex.add(relpath)
         run_dirs.append(relpath)
+
+    # A path exclusion is root-relative; one that matches nothing is usually a full
+    # path pasted in by mistake, which would otherwise silently exclude nothing.
+    unmatched = sorted(exclude_prefixes - matched_prefixes)
+    if unmatched and limit_subfolder is None:
+        print(f"[discovery] WARNING: path exclusion(s) matched no directory under "
+              f"root_dir -- they must be relative to it: {unmatched}", flush=True)
 
     if needs_reindex:
         print(f"[discovery] {len(needs_reindex)} run-dir(s) have no usable metadata.yaml "
@@ -451,6 +479,7 @@ def parse_args():
     parser.add_argument("--num_reannotation_workers", type=int, default=None, help="bags to reannotate at once; overrides pipeline.num_reannotation_workers (default 1 -- one bag at a time so each live SLAM run gets the whole machine/GPU)")
     parser.add_argument("--phase_batch_size", type=int, default=None, help="bags per reannotate-then-convert batch; overrides pipeline.phase_batch_size (0/unset = one batch of everything pending)")
     parser.add_argument("--max_total_converter_workers", type=int, default=None, help="cap on converter pool workers across all bags; overrides pipeline.max_total_converter_workers (0 = use the cpu budget)")
+    parser.add_argument("--exclude_subdirs", default=None, help="comma-separated exclusions for discovery: a bare name skips that dir at any depth, an entry with a '/' skips that root-relative path and everything under it; overrides pipeline.exclude_subdirs ('' / 'none' = exclude nothing)")
     parser.add_argument("--converter_extra_args", default=None, help="extra args passed through to the converter; overrides pipeline.converter_extra_args")
     return parser.parse_args()
 
@@ -489,7 +518,9 @@ def main():
     reannotate = bool(pcfg.get("reannotate", False))
     reannotate_config_arg = pcfg.get("reannotate_config", "") or ""
 
-    exclude_subdirs_raw = str(pcfg.get("exclude_subdirs", "calibration") or "")
+    exclude_subdirs_raw = str(pick(args.exclude_subdirs,
+                                   pcfg.get("exclude_subdirs", "calibration"),
+                                   "exclude_subdirs") or "")
     if exclude_subdirs_raw.strip().lower() in ("", "none"):
         exclude_subdirs = set()
     else:

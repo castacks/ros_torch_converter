@@ -25,7 +25,8 @@
   pipeline:
     num_conversion_workers: 2
     max_total_converter_workers: 4
-    exclude_subdirs: ''        # comma-separated names to skip, or '' / 'none' for all
+    exclude_subdirs: ''        # comma-separated dir names (any depth) and/or root-relative
+                               # paths (with a '/') to skip; '' / 'none' keeps all
     converter_extra_args: ''
     render_video: true
     video_config: config/video/thermal_pip.yaml
