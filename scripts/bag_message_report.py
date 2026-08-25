@@ -8,10 +8,15 @@ import os
 
 from tabulate import tabulate
 
-from headless_bag_reannotation import bag_topics
+from headless_bag_reannotation import bag_topics, remapped_topic
 
 HEADERS = ["Topic", "Original Count", "Reannotated Count", "Delta",
-           "KITTI Frames", "Coverage", "Status"]
+           "KITTI Frames", "Coverage", "Status", "Note"]
+
+# Note-column tags for a bag reannotated with `reannotation.force`: the original bag
+# already had these topics, so the counts are a fresh run vs the old data, not a merge.
+FORCED_TAG = "FORCED REGEN (replaces original)"
+PRESERVED_TAG = "pre-reannotation copy of {}"
 
 
 def _load_conversion_stats(kitti_dir):
@@ -20,16 +25,31 @@ def _load_conversion_stats(kitti_dir):
         return json.load(f)
 
 
-def build_report(original_dir, new_dir=None, kitti_dir=None):
+def build_report(original_dir, new_dir=None, kitti_dir=None,
+                 forced_topics=(), remap_prefix=""):
     """Return rows [[topic, orig_count, new_count, delta, kitti_frames, coverage,
-    status], ...] sorted by topic.
+    status, note], ...] sorted by topic.
 
     delta = new_count - original_count. A negative delta on a topic that isn't newly
-    added means the new bag lost messages relative to the original.
+    added means the new bag lost messages relative to the original -- except on a
+    forced-regeneration topic, where the two counts come from different sources.
+
+    `forced_topics` (with `remap_prefix`) are the topics the stack regenerates when
+    `reannotation.force` is on: those the original bag already had are tagged
+    FORCED_TAG, and the copies kept under `remap_prefix` are tagged as such, so the
+    table says outright which counts are the fresh run and which are the old data.
     """
     orig_topics = bag_topics(original_dir)
     new_topics = bag_topics(new_dir) if new_dir else {}
     all_topics = set(orig_topics) | set(new_topics)
+
+    notes = {}
+    if new_dir:
+        for topic in forced_topics:
+            if orig_topics.get(topic, 0) > 0:
+                notes[topic] = FORCED_TAG
+                if remap_prefix:
+                    notes[remapped_topic(topic, remap_prefix)] = PRESERVED_TAG.format(topic)
 
     kitti_topics = {}
     if kitti_dir:
@@ -55,13 +75,20 @@ def build_report(original_dir, new_dir=None, kitti_dir=None):
         else:
             frames_written, coverage_str, status = "-", "-", "-"
 
-        rows.append([topic, orig_count, new_count, delta, frames_written, coverage_str, status])
+        rows.append([topic, orig_count, new_count, delta, frames_written, coverage_str,
+                     status, notes.get(topic, "-")])
     return rows
 
 
 def write_report(rows, out_prefix):
     """Write `<out_prefix>.md` (tabulate) and `<out_prefix>.csv`."""
+    forced = [row[0] for row in rows if row[-1] == FORCED_TAG]
     with open(out_prefix + ".md", "w") as f:
+        if forced:
+            f.write("**Forced reannotation** (`reannotation.force`): {} were regenerated "
+                    "by this run -- for those rows the Original Count column is the data "
+                    "they replaced, not a baseline to match.\n\n".format(
+                        ", ".join("`{}`".format(t) for t in forced)))
         f.write(tabulate(rows, headers=HEADERS, tablefmt="pipe"))
         f.write("\n")
     with open(out_prefix + ".csv", "w", newline="") as f:
@@ -89,7 +116,8 @@ def main():
     print(tabulate(rows, headers=HEADERS, tablefmt="pipe"))
 
     if args.new:
-        dropped = [r for r in rows if isinstance(r[3], int) and r[3] < 0]
+        # a forced-regen topic's counts are two different runs, so a drop means nothing there
+        dropped = [r for r in rows if isinstance(r[3], int) and r[3] < 0 and r[-1] != FORCED_TAG]
         if dropped:
             print("\nWARNING: topics with fewer messages in the new bag (possible data loss):")
             for topic, orig, new, delta, *_ in dropped:

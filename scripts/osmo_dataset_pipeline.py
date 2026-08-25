@@ -21,7 +21,9 @@ import yaml
 from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, load_yaml
 from tartandriver_utils.rclone_stager import RcloneStager
 
-from headless_bag_reannotation import bag_has_superodometry, reannotate_bag, resolve_deploy_path
+from headless_bag_reannotation import (REANNOTATION_DEFAULTS, bag_has_topics,
+                                       config_regenerated_topics, load_reannotation_settings,
+                                       reannotate_bag, resolve_deploy_path)
 from bag_message_report import build_report, write_report
 from topic_sync_viz import render_sync_viz
 
@@ -284,13 +286,20 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
             if not is_kitti_dir(os.path.join(data_dir, dst_dir, dataset_relpath(relpath)))]
 
 
-def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None):
+def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None,
+                                 annotation_topics=None, force=False):
     """Split `relpaths` into (needs_reannotation, unreadable): bags whose raw metadata.yaml
-    is missing super_odometry, and bags whose metadata.yaml couldn't be read at all.
+    is missing any of `annotation_topics` (the reannotate_config's `rosbag_record.topics`
+    minus `reannotation.shared_topics`), and bags whose metadata.yaml couldn't be read at
+    all. With `force` (reannotation.force) or no `annotation_topics` to check against 
+    every readable bag needs reannotation regardless of what it already carries; the
+    metadata is still read, so an unusable bag is caught here rather than mid-playback.
     Checked via metadata.yaml only (no full-bag download) so phase 1 only stages bags it
     will actually reannotate -- except for bags in `prestaged`, which the reindex phase
     already staged in full and whose rebuilt metadata is read straight off disk."""
     prestaged = prestaged or {}
+    annotation_topics = list(annotation_topics or [])
+    force = force or not annotation_topics
     needed, unreadable = [], []
     for relpath in relpaths:
         tmpdir = None
@@ -303,7 +312,7 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
                 bag_dir = tmpdir
             else:
                 bag_dir = os.path.join(data_dir, root_dir, relpath)
-            if not bag_has_superodometry(bag_dir):
+            if force or not bag_has_topics(bag_dir, annotation_topics):
                 needed.append(relpath)
         except Exception as e:
             # One unreadable metadata.yaml must not take down the whole batch.
@@ -316,8 +325,9 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
 
 
 def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_scratch_root,
-                   dst_dir, pipeline_config, reannotate_config, reannotated_dir, record_drain,
-                   domain_queue, stager, data_dir, prestaged_dir=None):
+                   dst_dir, pipeline_config, reannotate_config, reannotate_settings,
+                   domain_queue, stager, data_dir, prestaged_dir=None, forced_topics=()):
+    reannotated_dir = reannotate_settings["reannotated_dir"]
     domain_id = None
     try:
         if prestaged_dir:
@@ -333,19 +343,20 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 
         if domain_queue is not None:
             domain_id = domain_queue.get()
-        print(f"[reannotate] {relpath}: missing super_odometry -- reannotating "
+        print(f"[reannotate] {relpath}: reannotating "
               f"(ROS_DOMAIN_ID={domain_id}) ...", flush=True)
 
         merged_root = os.path.join(merged_scratch_root, relpath)
         reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
         merged_dir = reannotate_bag(orig_dir, merged_root, domain_id=domain_id,
-                                    record_drain=record_drain, **reann_kwargs)
+                                    settings=reannotate_settings, **reann_kwargs)
         copy_bag_metadata(orig_dir, merged_dir)
 
         out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
         os.makedirs(out_dir, exist_ok=True)
         print(f"[reannotate] {relpath}: writing message-count report + sync viz ...", flush=True)
-        report_rows = build_report(orig_dir, merged_dir)
+        report_rows = build_report(orig_dir, merged_dir, forced_topics=forced_topics,
+                                   remap_prefix=reannotate_settings["remap_prefix"])
         write_report(report_rows, os.path.join(out_dir, "reannotate_report"))
         try:
             render_sync_viz(merged_dir, resolve_config_path(pipeline_config),
@@ -375,7 +386,8 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video, video_config, kitti_out_root, stager, data_dir,
                 local_out_dir, converter_workers, merged_bag_dir=None,
-                orig_bag_dir=None, merged_scratch_dir=None, prestaged_dir=None):
+                orig_bag_dir=None, merged_scratch_dir=None, prestaged_dir=None,
+                forced_topics=(), remap_prefix=""):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
     os.makedirs(out_dir, exist_ok=True)
@@ -438,7 +450,8 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         print(f"[convert] {relpath}: writing dataset report ...", flush=True)
         report_original_dir = orig_bag_dir if merged_bag_dir else src_dir
         copy_bag_metadata(report_original_dir, out_dir)
-        report_rows = build_report(report_original_dir, merged_bag_dir, kitti_dir=out_dir)
+        report_rows = build_report(report_original_dir, merged_bag_dir, kitti_dir=out_dir,
+                                   forced_topics=forced_topics, remap_prefix=remap_prefix)
         write_report(report_rows, os.path.join(out_dir, "dataset_report"))
 
         dst_relpath = os.path.join(dst_dir, dataset_relpath(relpath))
@@ -481,6 +494,7 @@ def parse_args():
     parser.add_argument("--max_total_converter_workers", type=int, default=None, help="cap on converter pool workers across all bags; overrides pipeline.max_total_converter_workers (0 = use the cpu budget)")
     parser.add_argument("--exclude_subdirs", default=None, help="comma-separated exclusions for discovery: a bare name skips that dir at any depth, an entry with a '/' skips that root-relative path and everything under it; overrides pipeline.exclude_subdirs ('' / 'none' = exclude nothing)")
     parser.add_argument("--converter_extra_args", default=None, help="extra args passed through to the converter; overrides pipeline.converter_extra_args")
+    parser.add_argument("--reannotate_config", default=None, help="playback config driving reannotation (repo-relative or absolute); overrides pipeline.reannotate_config")
     return parser.parse_args()
 
 
@@ -516,7 +530,9 @@ def main():
     render_video = bool(pcfg.get("render_video", True))
     video_config = pcfg.get("video_config", "") or ""
     reannotate = bool(pcfg.get("reannotate", False))
-    reannotate_config_arg = pcfg.get("reannotate_config", "") or ""
+    reannotate_config_arg = pick(args.reannotate_config,
+                                 pcfg.get("reannotate_config", "") or "",
+                                 "reannotate_config") or ""
 
     exclude_subdirs_raw = str(pick(args.exclude_subdirs,
                                    pcfg.get("exclude_subdirs", "calibration"),
@@ -553,19 +569,31 @@ def main():
     pending = filter_unconverted(run_dirs, args.dst_dir, stager=stager, data_dir=args.data_dir)
     print(f"[discovery] {len(pending)} pending (not yet converted)")
 
-    # reannotated_dir/record_drain come from reannotate_config's `reannotation:` block.
-    reannotate_config, reannotated_dir = "", ""
-    record_drain = 3.0
+    reannotate_config, reannotate_settings = "", dict(REANNOTATION_DEFAULTS)
+    annotation_topics, forced_topics = [], []
     if reannotate:
         assert reannotate_config_arg, "pipeline.reannotate_config is required when pipeline.reannotate is true"
         reannotate_config = resolve_deploy_path(reannotate_config_arg)
-        with open(reannotate_config) as f:
-            rsec = (yaml.safe_load(f) or {}).get("reannotation", {}) or {}
-        reannotated_dir = rsec.get("reannotated_dir", "") or ""
-        record_drain = float(rsec.get("record_drain", 3.0) or 3.0)
-        print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing "
-              f"super_odometry will be reannotated first, {num_reannotation_workers} "
-              f"at a time")
+        reannotate_settings = load_reannotation_settings(reannotate_config)
+        reannotated_dir = reannotate_settings["reannotated_dir"]
+        annotation_topics = config_regenerated_topics(reannotate_config, reannotate_settings)
+        # tags the reports: which topics a bag that already had them got regenerated over
+        forced_topics = annotation_topics if reannotate_settings["force"] else []
+        if reannotate_settings["force"]:
+            print(f"[reannotate] enabled (config={reannotate_config}), force=true -- every "
+                  f"pending bag is reannotated, {num_reannotation_workers} at a time; bags "
+                  f"that already have {annotation_topics} keep those copies under "
+                  f"{reannotate_settings['remap_prefix']} and get fresh ones on the "
+                  f"original names")
+        elif annotation_topics:
+            print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing any of "
+                  f"{annotation_topics} (rosbag_record.topics minus "
+                  f"{reannotate_settings['shared_topics']}) will be reannotated first, "
+                  f"{num_reannotation_workers} at a time")
+        else:
+            print(f"[reannotate] enabled (config={reannotate_config}) -- rosbag_record.topics "
+                  f"is 'all', so there's nothing to test a bag against: every pending bag "
+                  f"will be reannotated, {num_reannotation_workers} at a time")
         if reannotated_dir:
             print(f"[reannotate] merged reannotated bags will also be uploaded to "
                   f"{reannotated_dir}")
@@ -633,7 +661,9 @@ def main():
         merged_by_relpath = {}
         if reannotate and remaining:
             needs_reannotation, unreadable = classify_reannotation_needed(
-                remaining, args.root_dir, stager, args.data_dir, prestaged)
+                remaining, args.root_dir, stager, args.data_dir, prestaged,
+                annotation_topics=annotation_topics,
+                force=reannotate_settings["force"])
             for relpath, err in unreadable:
                 failed.append(relpath)
                 summary.append({
@@ -655,9 +685,9 @@ def main():
                         futures[pool.submit(
                             reannotate_one, relpath, args.root_dir, kitti_out_root,
                             orig_scratch_root, merged_scratch_root, args.dst_dir,
-                            args.pipeline_config, reannotate_config, reannotated_dir,
-                            record_drain, domain_queue, stager, args.data_dir,
-                            prestaged.get(relpath),
+                            args.pipeline_config, reannotate_config, reannotate_settings,
+                            domain_queue, stager, args.data_dir,
+                            prestaged.get(relpath), forced_topics,
                         )] = relpath
                     for future in as_completed(futures):
                         relpath, ok, err, merged_dir = future.result()
@@ -700,6 +730,7 @@ def main():
                         render_video, video_config, kitti_out_root,
                         stager, args.data_dir, args.local_out_dir, converter_workers,
                         merged_dir, orig_dir, merged_scratch_dir, prestaged.get(relpath),
+                        forced_topics, reannotate_settings["remap_prefix"],
                     )] = relpath
                 for future in as_completed(futures):
                     relpath, ok, err, kept_frames = future.result()

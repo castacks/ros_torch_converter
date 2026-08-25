@@ -1,16 +1,24 @@
 """Headless per-bag super_odometry reannotation for OSMO"""
 import argparse
 import os
+import shutil
 import signal
 import subprocess
 import time
 
 import yaml
 
-SO_TOPICS = [
-    "/superodometry/integrated_to_init",
-    "/superodometry/velodyne_cloud_registered",
-]
+# Defaults for the playback config's `reannotation:` block (see load_reannotation_settings).
+REANNOTATION_DEFAULTS = {
+    "reannotated_dir": "",
+    "record_drain": 3.0,
+    "force": False,
+    "remap_prefix": "/prereannotation",
+    "keep_remapped": True,
+    # Recorded topics the original bag legitimately has too, so they can neither gate
+    # reannotation nor be remapped away from the live stack.
+    "shared_topics": ["/tf", "/tf_static"],
+}
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.environ.get("TARTANDRIVER_HOME") or \
@@ -25,6 +33,28 @@ DEFAULT_REGISTRY = os.path.join(_DEPLOY_DIR, "default_registry.yaml")
 def resolve_deploy_path(path):
     """Resolve `path` against the repo root ($TARTANDRIVER_HOME) if it isn't already absolute."""
     return path if os.path.isabs(path) else os.path.join(_REPO_ROOT, path)
+
+
+def resolve_global_parameters_path(path):
+    """Locate a config's `global_parameters_fp` in this checkout or fall back to re-rooting the
+    `tartandriver_deploy/...` or None"""
+    candidate = resolve_deploy_path(path)
+    if os.path.exists(candidate):
+        return candidate
+    marker = "tartandriver_deploy" + os.sep
+    idx = path.find(marker)
+    if idx != -1:
+        candidate = os.path.join(_REPO_ROOT, path[idx:])
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def launch_arg(key, value):
+    """`key:=value` for ros2 launch, with YAML bools lowercased to ROS spelling."""
+    if isinstance(value, bool):
+        value = str(value).lower()
+    return "{}:={}".format(key, value)
 
 
 def default_models_dir():
@@ -42,7 +72,19 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
     with open(registry_path, "r") as f:
         registry = yaml.safe_load(f)
 
-    extra = []
+    global_params = {}
+    global_fp = config.get("global_parameters_fp")
+    if global_fp:
+        global_path = resolve_global_parameters_path(global_fp)
+        if global_path:
+            with open(global_path, "r") as f:
+                global_params = yaml.safe_load(f) or {}
+        else:
+            print("[reannotate] global_parameters_fp '{}' not found, "
+                  "using use_sim_time/models_dir defaults only".format(global_fp), flush=True)
+
+    extra = [launch_arg(k, v) for k, v in global_params.items()
+             if k not in ("use_sim_time", "models_dir")]
     if use_sim_time:
         extra.append("use_sim_time:=true")
     if models_dir:
@@ -54,7 +96,7 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
             "launch '{}' in {} not found in registry {}".format(key, config_path, registry_path)
         cmd = registry["launch"][key]["launch_cmd"].split()
         for k, v in (spec.get("launch_args") or {}).items():
-            cmd.append("{}:={}".format(k, v))
+            cmd.append(launch_arg(k, v))
         launches.append(cmd + extra)
 
     playback_args = (config.get("rosbag_playback", {}) or {}).get("args", {}) or {}
@@ -102,10 +144,55 @@ def bag_topics(bag_dir):
     }
 
 
-def bag_has_superodometry(bag_dir):
-    """True iff both SO topics are present in the bag with a non-zero message count."""
-    topics = bag_topics(bag_dir)
-    return all(topics.get(t, 0) > 0 for t in SO_TOPICS)
+def present_topics(bag_dir, topics):
+    """Subset of `topics` the bag actually carries (present with a non-zero count)."""
+    counts = bag_topics(bag_dir)
+    return [t for t in topics if counts.get(t, 0) > 0]
+
+
+def bag_has_topics(bag_dir, topics):
+    """True iff every topic in `topics` is in the bag with a non-zero message count."""
+    topics = list(topics)
+    return len(present_topics(bag_dir, topics)) == len(topics)
+
+
+def load_reannotation_settings(config_path):
+    """`reannotation:` block of a playback config, with REANNOTATION_DEFAULTS filled in.
+
+    Read by both this module and osmo_dataset_pipeline.py, so the block stays the one
+    place these knobs are configured."""
+    with open(config_path, "r") as f:
+        section = (yaml.safe_load(f) or {}).get("reannotation") or {}
+    settings = dict(REANNOTATION_DEFAULTS)
+    settings.update({k: v for k, v in section.items() if v is not None})
+    settings["reannotated_dir"] = str(settings["reannotated_dir"] or "")
+    settings["record_drain"] = float(settings["record_drain"])
+    settings["force"] = bool(settings["force"])
+    settings["keep_remapped"] = bool(settings["keep_remapped"])
+    settings["shared_topics"] = list(settings["shared_topics"])
+    return settings
+
+
+def regenerated_topics(record_topics, shared_topics):
+    """The subset of `rosbag_record.topics` that only the annotation stack produces"""
+    if record_topics == "all":
+        return []
+    shared = set(shared_topics)
+    return [t for t in record_topics if t not in shared]
+
+
+def config_regenerated_topics(config_path, settings=None):
+    """regenerated_topics() for a playback config's `rosbag_record.topics`."""
+    settings = settings or load_reannotation_settings(config_path)
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f) or {}
+    record_topics = (config.get("rosbag_record") or {}).get("topics", "all")
+    return regenerated_topics(record_topics, settings["shared_topics"])
+
+
+def remapped_topic(topic, prefix):
+    """`topic` moved under `prefix` (e.g. /superodometry/x -> /prereannotation/superodometry/x)."""
+    return "{}/{}".format(str(prefix).rstrip("/"), topic.lstrip("/"))
 
 
 def _sigint_group(proc):
@@ -133,21 +220,35 @@ def _wait_group(proc, grace):
 def reannotate_bag(src_dir, out_dir, domain_id=None,
                    config_path=DEFAULT_CONFIG, registry_path=DEFAULT_REGISTRY,
                    models_dir=None, use_sim_time=True, settle=8.0,
-                   record_settle=2.0, record_drain=3.0, shutdown_grace=15.0,
-                   localhost_only=True):
+                   record_settle=2.0, shutdown_grace=15.0,
+                   localhost_only=True, settings=None):
     """Reannotate a single bag headlessly; returns the resulting bag path (merged with
     the untouched original when `rosbag_record.topics` is a list of topics)."""
     if models_dir is None:
         models_dir = default_models_dir()
+    settings = settings or load_reannotation_settings(config_path)
     spec = build_stack_from_config(config_path, registry_path,
                                    models_dir=models_dir, use_sim_time=use_sim_time)
     launches = spec["launches"]
-    remap = spec["remap"]
+    remap = list(spec["remap"])
     record_topics = spec["record_topics"]
     record_storage = spec["record_storage"]
     play_rate = spec["play_rate"]
     start_offset = spec["start_offset"]
     extra_play_args = spec.get("extra_play_args", [])
+    record_drain = settings["record_drain"]
+
+    remapped = {}
+    if settings["force"]:
+        regenerated = regenerated_topics(record_topics, settings["shared_topics"])
+        remapped = {t: remapped_topic(t, settings["remap_prefix"])
+                    for t in present_topics(src_dir, regenerated)}
+    if remapped:
+        remap += ["{}:={}".format(old, new) for old, new in sorted(remapped.items())]
+        print("[reannotate] force: replaying existing {} under {}".format(
+            ", ".join(sorted(remapped)), settings["remap_prefix"]), flush=True)
+        if settings["keep_remapped"] and record_topics != "all":
+            record_topics = list(record_topics) + [remapped[t] for t in sorted(remapped)]
 
     env = os.environ.copy()
     if domain_id is not None:
@@ -204,14 +305,40 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
 
         if not merge_new_topics:
             return record_path
-        return merge_bags(src_dir, record_path, out_dir, bag_name,
-                          storage_id=record_storage, env=env)
+        merge_src, filtered_dir = src_dir, None
+        try:
+            if remapped:
+                filtered_dir = os.path.join(out_dir, bag_name + "_orig_filtered")
+                merge_src = filter_bag(src_dir, filtered_dir, list(remapped),
+                                       storage_id=record_storage, env=env)
+            return merge_bags(merge_src, record_path, out_dir, bag_name,
+                              storage_id=record_storage, env=env)
+        finally:
+            if filtered_dir:
+                shutil.rmtree(filtered_dir, ignore_errors=True)
     finally:
         # 5. tear the whole stack down (reverse order); record already handled above
         for p in reversed(procs):
             _sigint_group(p)
         for p in reversed(procs):
             _wait_group(p, shutdown_grace)
+
+
+def filter_bag(src_dir, out_path, drop_topics, storage_id="mcap", env=None):
+    """Copy `src_dir` to `out_path` minus `drop_topics`, via `ros2 bag convert`"""
+    drop = set(drop_topics)
+    keep = [t for t in bag_topics(src_dir) if t not in drop]
+    assert keep, "dropping {} would leave nothing in {}".format(sorted(drop), src_dir)
+    convert_opts_path = out_path + "_convert_opts.yaml"
+    with open(convert_opts_path, "w") as f:
+        yaml.safe_dump({"output_bags": [
+            {"uri": out_path, "storage_id": storage_id, "topics": keep},
+        ]}, f)
+    subprocess.run(
+        ["ros2", "bag", "convert", "-i", src_dir, "-o", convert_opts_path],
+        env=env, check=True,
+    )
+    return out_path
 
 
 def merge_bags(bag_a, bag_b, out_dir, out_name, storage_id="mcap", env=None):
@@ -228,38 +355,3 @@ def merge_bags(bag_a, bag_b, out_dir, out_name, storage_id="mcap", env=None):
         env=env, check=True,
     )
     return merged_path
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--src_dir", required=True, help="raw rosbag run-dir to reannotate")
-    parser.add_argument("--out_dir", required=True, help="dir to write the reannotated bag into")
-    parser.add_argument("--domain_id", type=int, default=None, help="ROS_DOMAIN_ID for this run")
-    parser.add_argument("--config", default=DEFAULT_CONFIG,
-                        help="tartandriver_deploy playback config defining the stack")
-    parser.add_argument("--registry", default=DEFAULT_REGISTRY,
-                        help="tartandriver_deploy launch registry")
-    parser.add_argument("--models_dir", default=default_models_dir(),
-                        help="models_dir launch arg (default $MODELS_DIR or $TARTANDRIVER_HOME/models)")
-    parser.add_argument("--settle", type=float, default=8.0)
-    parser.add_argument("--force", action="store_true",
-                        help="reannotate even if the bag already has super_odometry")
-    return parser.parse_args()
-
-
-def main():
-    args = parse_args()
-    if not args.force and bag_has_superodometry(args.src_dir):
-        print("[reannotate] {} already has super_odometry; skipping".format(args.src_dir))
-        return
-    out = reannotate_bag(
-        args.src_dir, args.out_dir, domain_id=args.domain_id,
-        config_path=args.config, registry_path=args.registry,
-        models_dir=args.models_dir, settle=args.settle,
-    )
-    print("[reannotate] wrote {}".format(out))
-
-
-if __name__ == "__main__":
-    main()
