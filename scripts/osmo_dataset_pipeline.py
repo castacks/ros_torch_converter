@@ -326,7 +326,8 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
 
 def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_scratch_root,
                    dst_dir, pipeline_config, reannotate_config, reannotate_settings,
-                   domain_queue, stager, data_dir, prestaged_dir=None, forced_topics=()):
+                   domain_queue, stager, data_dir, dst_stager=None, prestaged_dir=None,
+                   forced_topics=()):
     reannotated_dir = reannotate_settings["reannotated_dir"]
     domain_id = None
     try:
@@ -366,11 +367,12 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
             print(f"[reannotate] {relpath}: topic_sync_viz failed (non-fatal): {e}", flush=True)
 
         if reannotated_dir:
-            if stager:
+            upload_stager = dst_stager or stager
+            if upload_stager:
                 bag_dst_relpath = os.path.join(dst_dir, reannotated_dir, relpath)
                 print(f"[reannotate] {relpath}: copying reannotated bag to "
-                      f"{stager.remote}:{bag_dst_relpath} ...", flush=True)
-                stager.copy_out(merged_dir, bag_dst_relpath)
+                      f"{upload_stager.remote}:{bag_dst_relpath} ...", flush=True)
+                upload_stager.copy_out(merged_dir, bag_dst_relpath)
             else:
                 print(f"[reannotate] {relpath}: no stager configured -- skipping "
                       f"reannotated_dir save", flush=True)
@@ -385,9 +387,9 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 
 def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
                 render_video, video_config, kitti_out_root, stager, data_dir,
-                local_out_dir, converter_workers, merged_bag_dir=None,
-                orig_bag_dir=None, merged_scratch_dir=None, prestaged_dir=None,
-                forced_topics=(), remap_prefix=""):
+                local_out_dir, converter_workers, dst_stager=None, extra_dst_dir="",
+                merged_bag_dir=None, orig_bag_dir=None, merged_scratch_dir=None,
+                prestaged_dir=None, forced_topics=(), remap_prefix=""):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
     os.makedirs(out_dir, exist_ok=True)
@@ -455,13 +457,19 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         write_report(report_rows, os.path.join(out_dir, "dataset_report"))
 
         dst_relpath = os.path.join(dst_dir, dataset_relpath(relpath))
-        if stager:
-            print(f"[convert] {relpath}: copying result to {stager.remote}:{dst_relpath} ...", flush=True)
-            stager.copy_out(out_dir, dst_relpath)
+        upload_stager = dst_stager or stager
+        if upload_stager:
+            print(f"[convert] {relpath}: copying result to {upload_stager.remote}:{dst_relpath} ...", flush=True)
+            upload_stager.copy_out(out_dir, dst_relpath)
         else:
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...", flush=True)
             shutil.copytree(out_dir, local_dst, dirs_exist_ok=True)
+
+        if extra_dst_dir and stager:
+            extra_relpath = os.path.join(extra_dst_dir, dataset_relpath(relpath))
+            print(f"[convert] {relpath}: also copying result to {stager.remote}:{extra_relpath} ...", flush=True)
+            stager.copy_out(out_dir, extra_relpath)
         return relpath, True, None, kept_frames
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e), None
@@ -484,6 +492,8 @@ def parse_args():
     parser.add_argument("--root_dir", required=True, help="root to scan for run-dirs (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
     parser.add_argument("--dst_dir", required=True, help="destination for the final KITTI copy-back (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
     parser.add_argument("--data_dir", default="", help="local mount root for full-copy mode (bulk_copy.sh); when set, reads/writes go straight to this mount instead of through an RcloneStager")
+    parser.add_argument("--dst_remote", default="", help="rclone remote for the destination copy-back (dst_dir) and the already-converted check; defaults to the source remote (ignored in --data_dir mode)")
+    parser.add_argument("--extra_dst_dir", default="", help="if set, also copy each converted KITTI dataset to this path on the *source* remote (stager) after the primary dst_dir copy-back -- e.g. mirror results back to the on-prem airlab_storage server in addition to --dst_remote/--dst_dir. Ignored in --data_dir mode.")
     parser.add_argument("--pipeline_config", required=True,
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
@@ -511,6 +521,7 @@ def main():
     sys.stdout.reconfigure(line_buffering=True)
 
     stager = RcloneStager() if not args.data_dir else None
+    dst_stager = RcloneStager(remote=args.dst_remote) if (stager and args.dst_remote) else stager
 
     cfg = load_yaml(resolve_config_path(args.pipeline_config))
     pcfg = cfg.get("pipeline", {}) or {}
@@ -566,7 +577,7 @@ def main():
         stager=stager, data_dir=args.data_dir)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
-    pending = filter_unconverted(run_dirs, args.dst_dir, stager=stager, data_dir=args.data_dir)
+    pending = filter_unconverted(run_dirs, args.dst_dir, stager=dst_stager, data_dir=args.data_dir)
     print(f"[discovery] {len(pending)} pending (not yet converted)")
 
     reannotate_config, reannotate_settings = "", dict(REANNOTATION_DEFAULTS)
@@ -686,7 +697,7 @@ def main():
                             reannotate_one, relpath, args.root_dir, kitti_out_root,
                             orig_scratch_root, merged_scratch_root, args.dst_dir,
                             args.pipeline_config, reannotate_config, reannotate_settings,
-                            domain_queue, stager, args.data_dir,
+                            domain_queue, stager, args.data_dir, dst_stager,
                             prestaged.get(relpath), forced_topics,
                         )] = relpath
                     for future in as_completed(futures):
@@ -729,7 +740,8 @@ def main():
                         args.pipeline_config, converter_extra_args,
                         render_video, video_config, kitti_out_root,
                         stager, args.data_dir, args.local_out_dir, converter_workers,
-                        merged_dir, orig_dir, merged_scratch_dir, prestaged.get(relpath),
+                        dst_stager, args.extra_dst_dir, merged_dir, orig_dir,
+                        merged_scratch_dir, prestaged.get(relpath),
                         forced_topics, reannotate_settings["remap_prefix"],
                     )] = relpath
                 for future in as_completed(futures):
