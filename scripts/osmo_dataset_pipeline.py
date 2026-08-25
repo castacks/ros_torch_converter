@@ -458,9 +458,14 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
 
         dst_relpath = os.path.join(dst_dir, dataset_relpath(relpath))
         upload_stager = dst_stager or stager
+        copy_error = None
         if upload_stager:
             print(f"[convert] {relpath}: copying result to {upload_stager.remote}:{dst_relpath} ...", flush=True)
-            upload_stager.copy_out(out_dir, dst_relpath)
+            try:
+                upload_stager.copy_out(out_dir, dst_relpath)
+            except subprocess.CalledProcessError as e:
+                copy_error = f"primary copy-back to {upload_stager.remote}:{dst_relpath} failed: {e}"
+                print(f"[convert] {relpath}: {copy_error}", flush=True)
         else:
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...", flush=True)
@@ -469,7 +474,15 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         if extra_dst_dir and stager:
             extra_relpath = os.path.join(extra_dst_dir, dataset_relpath(relpath))
             print(f"[convert] {relpath}: also copying result to {stager.remote}:{extra_relpath} ...", flush=True)
-            stager.copy_out(out_dir, extra_relpath)
+            try:
+                stager.copy_out(out_dir, extra_relpath)
+            except subprocess.CalledProcessError as e:
+                extra_error = f"extra copy-back to {stager.remote}:{extra_relpath} failed: {e}"
+                print(f"[convert] {relpath}: {extra_error}", flush=True)
+                copy_error = f"{copy_error}; {extra_error}" if copy_error else extra_error
+
+        if copy_error:
+            return relpath, False, copy_error, None
         return relpath, True, None, kept_frames
     except subprocess.CalledProcessError as e:
         return relpath, False, str(e), None
