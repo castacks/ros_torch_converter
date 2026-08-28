@@ -35,3 +35,7 @@
     reannotate_config: tartandriver_deploy/configs/playback/postprocess_super_odometry.yaml
     num_reannotation_workers: 1
     phase_batch_size: 6 #0/unset = one batch of everything pending.
+
+    pack_hdf5: true
+    keep_kitti_local: false     # drop the per-bag KITTI tree once both copies land
+    recover_truncated_mcap: true  # rebuild a truncated final .mcap before reindex

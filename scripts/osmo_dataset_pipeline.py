@@ -26,10 +26,12 @@ from headless_bag_reannotation import (REANNOTATION_DEFAULTS, bag_has_topics,
                                        reannotate_bag, resolve_deploy_path)
 from bag_message_report import build_report, write_report
 from topic_sync_viz import render_sync_viz
+from recover_truncated_mcap import recover_mcap
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONVERTER_SCRIPT = os.path.join(SCRIPT_DIR, "ros2bag_2_kitti_multiproc.py")
+KITTI_2_HDF5_SCRIPT = os.path.join(SCRIPT_DIR, "kitti_2_hdf5.py")
 CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)
 
 
@@ -141,8 +143,11 @@ def bag_metadata_is_valid(bag_dir):
     return isinstance(metadata, dict) and "rosbag2_bagfile_information" in metadata
 
 
-def reindex_bag(bag_dir, relpath=""):
+def reindex_bag(bag_dir, relpath="", recover_truncated=True):
     """Rebuild a bag's metadata.yaml from its storage files with `ros2 bag reindex`.
+
+    Returns the list of (filename, action) tuples from any truncated-mcap
+    recovery so the caller can record it; empty when nothing was recovered.
     """
     storage_files = sorted(f for f in os.listdir(bag_dir)
                            if os.path.splitext(f)[1] in STORAGE_ID_BY_EXT)
@@ -154,6 +159,13 @@ def reindex_bag(bag_dir, relpath=""):
     storage_files = [f for f in storage_files if f not in empty]
     if not storage_files:
         raise RuntimeError("no non-empty storage files to reindex")
+
+    recovery_actions = recover_mcap(bag_dir, relpath) if recover_truncated else []
+    if recovery_actions:
+        storage_files = sorted(f for f in os.listdir(bag_dir)
+                               if os.path.splitext(f)[1] in STORAGE_ID_BY_EXT)
+        if not storage_files:
+            raise RuntimeError("no storage files left after truncated-mcap recovery")
 
     storage_ids = {STORAGE_ID_BY_EXT[os.path.splitext(f)[1]] for f in storage_files}
     if len(storage_ids) != 1:
@@ -178,15 +190,19 @@ def reindex_bag(bag_dir, relpath=""):
         raise RuntimeError("`ros2 bag reindex` reported success but wrote no usable "
                            f"metadata.yaml:\n{result.stdout.strip()}")
     print(f"[reindex] {relpath}: metadata.yaml rebuilt", flush=True)
+    return recovery_actions
 
 
-def repair_bag_metadata(bag_dir, relpath=""):
+def repair_bag_metadata(bag_dir, relpath="", recover_truncated=True):
     """Make a staged bag readable: rebuild metadata.yaml if it's missing or empty, then
     backfill an empty storage_identifier. Raises if the bag can't be repaired. Idempotent,
-    so it's safe to call again on an already-repaired dir."""
+    so it's safe to call again on an already-repaired dir. Returns the truncated-mcap
+    recovery actions (empty unless a reindex happened and recovered something)."""
+    recovery_actions = []
     if not bag_metadata_is_valid(bag_dir):
-        reindex_bag(bag_dir, relpath)
+        recovery_actions = reindex_bag(bag_dir, relpath, recover_truncated=recover_truncated)
     repair_bag_storage_identifier(bag_dir, relpath)
+    return recovery_actions
 
 
 def local_lsdir_recursive(root_dir):
@@ -389,7 +405,8 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
                 render_video, video_config, kitti_out_root, stager, data_dir,
                 local_out_dir, converter_workers, dst_stager=None, extra_dst_dir="",
                 merged_bag_dir=None, orig_bag_dir=None, merged_scratch_dir=None,
-                prestaged_dir=None, forced_topics=(), remap_prefix=""):
+                prestaged_dir=None, forced_topics=(), remap_prefix="",
+                pack_hdf5=False, h5_out_root="", keep_kitti_local=True):
     scratch_dir = tempfile.mkdtemp(prefix="osmo_pipeline_raw_")
     out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
     os.makedirs(out_dir, exist_ok=True)
@@ -456,20 +473,33 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
                                    forced_topics=forced_topics, remap_prefix=remap_prefix)
         write_report(report_rows, os.path.join(out_dir, "dataset_report"))
 
+        primary_src = out_dir
+        if pack_hdf5:
+            primary_src = os.path.join(
+                h5_out_root or (kitti_out_root.rstrip("/") + "_h5"),
+                dataset_relpath(relpath))
+            print(f"[convert] {relpath}: packing KITTI tree -> HDF5 mirror ...", flush=True)
+            pack_rc = subprocess.run([
+                sys.executable, KITTI_2_HDF5_SCRIPT,
+                "--src_dir", out_dir, "--dst_dir", primary_src,
+            ]).returncode
+            if pack_rc != 0:
+                return relpath, False, f"hdf5 pack exited with code {pack_rc}", None
+
         dst_relpath = os.path.join(dst_dir, dataset_relpath(relpath))
         upload_stager = dst_stager or stager
         copy_error = None
         if upload_stager:
             print(f"[convert] {relpath}: copying result to {upload_stager.remote}:{dst_relpath} ...", flush=True)
             try:
-                upload_stager.copy_out(out_dir, dst_relpath)
+                upload_stager.copy_out(primary_src, dst_relpath)
             except subprocess.CalledProcessError as e:
                 copy_error = f"primary copy-back to {upload_stager.remote}:{dst_relpath} failed: {e}"
                 print(f"[convert] {relpath}: {copy_error}", flush=True)
         else:
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...", flush=True)
-            shutil.copytree(out_dir, local_dst, dirs_exist_ok=True)
+            shutil.copytree(primary_src, local_dst, dirs_exist_ok=True)
 
         if extra_dst_dir and stager:
             extra_relpath = os.path.join(extra_dst_dir, dataset_relpath(relpath))
@@ -496,7 +526,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             shutil.rmtree(prestaged_dir, ignore_errors=True)
         if merged_scratch_dir:
             shutil.rmtree(merged_scratch_dir, ignore_errors=True)
-        if not local_out_dir:  # keep the dataset when a known output dir was requested
+        if (not local_out_dir) or (pack_hdf5 and not keep_kitti_local):
             shutil.rmtree(out_dir, ignore_errors=True)
 
 
@@ -510,7 +540,8 @@ def parse_args():
     parser.add_argument("--pipeline_config", required=True,
                         help="path to a ros_torch_converter config yaml")
     parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
-    parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally")
+    parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally. With pipeline.pack_hdf5 this is the HDF5-mirror root (and where _pipeline_summary.json lands); the KITTI tree goes under --kitti_local_dir.")
+    parser.add_argument("--kitti_local_dir", default="", help="with pipeline.pack_hdf5: where the intermediate KITTI trees are written (default: a scratch tempdir removed at the end). Ignored unless pack_hdf5 is set.")
     parser.add_argument("--num_conversion_workers", type=int, default=None, help="bags to convert at once; overrides pipeline.num_conversion_workers")
     parser.add_argument("--num_reannotation_workers", type=int, default=None, help="bags to reannotate at once; overrides pipeline.num_reannotation_workers (default 1 -- one bag at a time so each live SLAM run gets the whole machine/GPU)")
     parser.add_argument("--phase_batch_size", type=int, default=None, help="bags per reannotate-then-convert batch; overrides pipeline.phase_batch_size (0/unset = one batch of everything pending)")
@@ -554,6 +585,9 @@ def main():
     render_video = bool(pcfg.get("render_video", True))
     video_config = pcfg.get("video_config", "") or ""
     reannotate = bool(pcfg.get("reannotate", False))
+    recover_truncated_mcap = bool(pcfg.get("recover_truncated_mcap", True))
+    pack_hdf5 = bool(pcfg.get("pack_hdf5", False))
+    keep_kitti_local = bool(pcfg.get("keep_kitti_local", True))
     reannotate_config_arg = pick(args.reannotate_config,
                                  pcfg.get("reannotate_config", "") or "",
                                  "reannotate_config") or ""
@@ -624,7 +658,15 @@ def main():
 
     orig_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_orig_")
     merged_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_merged_")
-    kitti_out_root = args.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
+    if pack_hdf5:
+        h5_out_root = args.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_h5scratch_")
+        kitti_out_root = args.kitti_local_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
+    else:
+        h5_out_root = ""
+        kitti_out_root = args.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
+    print(f"[config] pack_hdf5={pack_hdf5}"
+          + (f" (h5 -> {h5_out_root}, kitti -> {kitti_out_root}, "
+             f"keep_kitti_local={keep_kitti_local})" if pack_hdf5 else ""))
 
     summary_path = os.path.join(args.local_out_dir, "_pipeline_summary.json") if args.local_out_dir else None
     summary = []
@@ -664,9 +706,17 @@ def main():
                 if stager:
                     print(f"[reindex] {relpath}: copying raw bag from {stager.remote} ...", flush=True)
                     stager.copy_in(os.path.join(args.root_dir, relpath), bag_dir)
-                repair_bag_metadata(bag_dir, relpath)
+                recovery_actions = repair_bag_metadata(
+                    bag_dir, relpath, recover_truncated=recover_truncated_mcap)
                 if stager:
                     prestaged[relpath] = bag_dir
+                if recovery_actions:
+                    summary.append({
+                        "relpath": relpath, "phase": "reindex",
+                        "status": "recovered",
+                        "reason": "; ".join(f"{n}: {w}" for n, w in recovery_actions),
+                        "duration_s": round(time.time() - reindex_start, 1),
+                    })
             except Exception as e:
                 print(f"[reindex] FAIL {relpath}: {e}", flush=True)
                 failed.append(relpath)
@@ -756,6 +806,7 @@ def main():
                         dst_stager, args.extra_dst_dir, merged_dir, orig_dir,
                         merged_scratch_dir, prestaged.get(relpath),
                         forced_topics, reannotate_settings["remap_prefix"],
+                        pack_hdf5, h5_out_root, keep_kitti_local,
                     )] = relpath
                 for future in as_completed(futures):
                     relpath, ok, err, kept_frames = future.result()
@@ -778,8 +829,10 @@ def main():
 
     shutil.rmtree(orig_scratch_root, ignore_errors=True)
     shutil.rmtree(merged_scratch_root, ignore_errors=True)
-    if not args.local_out_dir:
+    if kitti_out_root not in (args.local_out_dir, args.kitti_local_dir):
         shutil.rmtree(kitti_out_root, ignore_errors=True)
+    if pack_hdf5 and h5_out_root and h5_out_root != args.local_out_dir:
+        shutil.rmtree(h5_out_root, ignore_errors=True)
 
     stop_memory_logger()  # quiet the [mem]/[disk] heartbeat now that all work is done
 

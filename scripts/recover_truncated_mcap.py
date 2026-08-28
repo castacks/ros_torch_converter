@@ -87,7 +87,7 @@ def _recover_with_cli(src, dst):
     return os.path.exists(dst) and mcap_has_trailing_magic(dst)
 
 
-def _recover_with_python(src, prefix_len, dst):
+def _recover_with_python(src, dst):
     """Rebuild by streaming the source's records through ``mcap.writer``.
 
     Reads the file sequentially (bounded memory -- no 11 GB slurp) and stops at
@@ -179,7 +179,7 @@ def recover_mcap(bag_dir, relpath=""):
         ok = _recover_with_cli(path, tmp)
         if not ok:
             how = "pure-python rebuild"
-            ok = _recover_with_python(path, prefix_len, tmp)
+            ok = _recover_with_python(path, tmp)
 
         if ok:
             os.replace(tmp, path)
