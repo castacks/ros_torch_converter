@@ -12,6 +12,11 @@ from tqdm import tqdm
 import shutil
 import yaml
 
+from ros_torch_converter.datatypes.intrinsics import CameraInfoTorch
+
+SENSORS_GROUP = 'sensors'
+cam_dtype = np.float64
+
 def read_kalibr_stereo(config):
     '''Read a typical kalibr stereo calibration from config'''
     calib_data = config['calib']
@@ -20,20 +25,22 @@ def read_kalibr_stereo(config):
     fx, fy, cx, cy = calib_data['cam0']['intrinsics']
     K_left = np.array([[fx, 0.0, cx],
                        [0.0, fy, cy],
-                       [0.0, 0.0, 1.0]])
-    distort_left = np.array(calib_data['cam0']['distortion_coeffs'])
+                       [0.0, 0.0, 1.0]], dtype=cam_dtype)
+    distort_left = np.array(calib_data['cam0']['distortion_coeffs'], dtype=cam_dtype)
     calib_dict['K_left'] = K_left
     calib_dict['distort_left'] = distort_left
+    calib_dict['distort_model_left'] = calib_data['cam0']['distortion_model']
 
     fx, fy, cx, cy = calib_data['cam1']['intrinsics']
     K_right = np.array([[fx, 0.0, cx],
                        [0.0, fy, cy],
-                       [0.0, 0.0, 1.0]])
-    distort_right = np.array(calib_data['cam1']['distortion_coeffs'])
+                       [0.0, 0.0, 1.0]], dtype=cam_dtype)
+    distort_right = np.array(calib_data['cam1']['distortion_coeffs'], dtype=cam_dtype)
     calib_dict['K_right'] = K_right
     calib_dict['distort_right'] = distort_right
+    calib_dict['distort_model_right'] = calib_data['cam1']['distortion_model']
     
-    calib_dict['T_right2left'] = np.array(calib_data['cam1']['T_cn_cnm1']).reshape(4,4)
+    calib_dict['T_right2left'] = np.array(calib_data['cam1']['T_cn_cnm1'], dtype=cam_dtype).reshape(4,4)
 
     return calib_dict
 
@@ -50,6 +57,10 @@ def stereo_rectify(left, right, calib_dict) -> np.ndarray:
         right_rect: Rectified right image
         K_left: New Left camera intrinsic matrix
         K_right: New Right camera intrinsic matrix
+        R_left: Rectification rotation matrix for left camera
+        R_right: Rectification rotation matrix for right camera
+        P_left: Projection matrix for left rectified image
+        P_right: Projection matrix for right rectified image
     """
     width, height = left.shape[1], left.shape[0]
     T_left2right = np.linalg.inv(calib_dict['T_right2left'])
@@ -64,8 +75,12 @@ def stereo_rectify(left, right, calib_dict) -> np.ndarray:
     right_rect = cv2.remap(right, undistort_map_right[0], undistort_map_right[1], cv2.INTER_LINEAR)
     
     K_left = P1[:3, :3]
+    R_left = R1
+    P_left = P1
     K_right = P2[:3, :3]
-    return left_rect, right_rect, K_left, K_right
+    R_right = R2
+    P_right = P2
+    return left_rect, right_rect, K_left, K_right, R_left, R_right, P_left, P_right
 
 def enhance_image(image):
     # Expects 8-bit
@@ -109,23 +124,32 @@ if __name__ == '__main__':
     
     calib_dict = read_kalibr_stereo(config)
     
-    left_imgs = sorted(glob.glob(os.path.join(args.dataset, config['left_dir'], '*.png')))
-    right_imgs = sorted(glob.glob(os.path.join(args.dataset, config['right_dir'], '*.png')))
+    left_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['left_dir'], '*.png')))
+    right_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['right_dir'], '*.png')))
     
     print(f"Found {len(left_imgs)} left images and {len(right_imgs)} right images")
     assert len(left_imgs) == len(right_imgs), "Left and right image directories must have the same number of images"
 
-    left_out_dir = os.path.join(args.dataset, f"{config['left_dir']}_{output_suffix}")
-    right_out_dir = os.path.join(args.dataset, f"{config['right_dir']}_{output_suffix}")
+    left_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['left_dir']}_{output_suffix}")
+    right_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['right_dir']}_{output_suffix}")
     os.makedirs(left_out_dir, exist_ok=True)
     os.makedirs(right_out_dir, exist_ok=True)
-    
-    left_timestamps = os.path.join(args.dataset, config['left_dir'], 'timestamps.txt')
-    right_timestamps = os.path.join(args.dataset, config['right_dir'], 'timestamps.txt')
-    shutil.copy(left_timestamps, os.path.join(left_out_dir, 'timestamps.txt'))
-    shutil.copy(right_timestamps, os.path.join(right_out_dir, 'timestamps.txt'))
 
-    for left_img_path, right_img_path in tqdm(zip(left_imgs, right_imgs), total=len(left_imgs)):
+    left_camera_info_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['left_dir']}_{output_suffix}_camera_info")
+    right_camera_info_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['right_dir']}_{output_suffix}_camera_info")
+    os.makedirs(left_camera_info_out_dir, exist_ok=True)
+    os.makedirs(right_camera_info_out_dir, exist_ok=True)
+    
+    left_timestamps = os.path.join(args.dataset, "sensors", config['left_dir'], 'timestamps.txt')
+    left_info = os.path.join(args.dataset, "sensors", config['left_dir'], 'info.yaml')
+    right_timestamps = os.path.join(args.dataset, "sensors", config['right_dir'], 'timestamps.txt')
+    right_info = os.path.join(args.dataset, "sensors", config['right_dir'], 'info.yaml')
+    shutil.copy(left_timestamps, os.path.join(left_out_dir, 'timestamps.txt'))
+    shutil.copy(left_info, os.path.join(left_out_dir, 'info.yaml'))
+    shutil.copy(right_timestamps, os.path.join(right_out_dir, 'timestamps.txt'))
+    shutil.copy(right_info, os.path.join(right_out_dir, 'info.yaml'))
+
+    for idx, (left_img_path, right_img_path) in enumerate(tqdm(zip(left_imgs, right_imgs), total=len(left_imgs))):
         left_filename = os.path.basename(left_img_path)
         right_filename = os.path.basename(right_img_path)
         
@@ -138,8 +162,15 @@ if __name__ == '__main__':
             print(f"Warning: Could not load images {left_filename}")
             continue
         
+        # placeholders in case config doesn't require rectify
+        R_left = np.eye(3, dtype=cam_dtype)
+        R_right = np.eye(3, dtype=cam_dtype)
+        P_left = np.hstack((calib_dict['K_left'], np.zeros((3, 1))), dtype=cam_dtype)
+        P_right = np.hstack((calib_dict['K_right'], np.zeros((3, 1))), dtype=cam_dtype)
+
         if config['rectify']:
-            left_img, right_img, K_left, K_right = stereo_rectify(left_img, right_img, calib_dict)
+            left_img, right_img, K_left, K_right, \
+                R_left, R_right, P_left, P_right = stereo_rectify(left_img, right_img, calib_dict)
         
         if config['process'] is not None:
             left_img = process_image(left_img, config['process'])
@@ -155,7 +186,20 @@ if __name__ == '__main__':
         cv2.imwrite(left_out_path, left_img)
         cv2.imwrite(right_out_path, right_img)
 
+        # save camera info to directory
+        left_h, left_w = left_img.shape
+        left_cam_info = CameraInfoTorch.from_numpy(calib_dict['K_left'], calib_dict['distort_left'], R_left, P_left, 
+                                                    calib_dict['distort_model_left'], left_w, left_h, device='cpu')
+        left_cam_info.to_kitti(left_camera_info_out_dir, idx)
+        
+        right_h, right_w = right_img.shape
+        right_cam_info = CameraInfoTorch.from_numpy(calib_dict['K_right'], calib_dict['distort_right'], R_right, P_right, 
+                                                        calib_dict['distort_model_right'], right_w, right_h, device='cpu')
+        right_cam_info.to_kitti(right_camera_info_out_dir, idx)
+
     print(f'Done processing {len(left_imgs)} stereo thermal image pairs')
     print(f'Output saved to:')
     print(f'  Left: {left_out_dir}')
     print(f'  Right: {right_out_dir}')
+    print(f'  Left camera info: {left_camera_info_out_dir}')
+    print(f'  Right camera info: {right_camera_info_out_dir}')
