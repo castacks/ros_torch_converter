@@ -29,3 +29,67 @@
   max_age: 1.
   optional: true
   args: {}
+
+- name: thermal_left_intrinsics
+  group: sensors
+  topic: /thermal_left/camera_info
+  type: Intrinsics
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_left_camera_info
+  group: sensors
+  topic: /thermal_left/camera_info
+  type: CameraInfo
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_left_processed_intrinsics
+  group: sensors
+  topic: /thermal_left/image_processed/camera_info
+  type: Intrinsics
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_left_processed_camera_info
+  group: sensors
+  topic: /thermal_left/image_processed/camera_info
+  type: CameraInfo
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right_intrinsics
+  group: sensors
+  topic: /thermal_right/camera_info
+  type: Intrinsics
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right_camera_info
+  group: sensors
+  topic: /thermal_right/camera_info
+  type: CameraInfo
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right_processed_intrinsics
+  group: sensors
+  topic: /thermal_right/image_processed/camera_info
+  type: Intrinsics
+  max_age: 1.
+  optional: true
+  args: {}
+
+- name: thermal_right_processed_camera_info
+  group: sensors
+  topic: /thermal_right/image_processed/camera_info
+  type: CameraInfo
+  max_age: 1.
+  optional: true
+  args: {}
