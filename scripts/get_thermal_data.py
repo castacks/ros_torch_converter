@@ -100,9 +100,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--dataset', type=str, required=True, help='/path/to/dataset')
     parser.add_argument('--config', type=str, required=True, help='path to config file')
+    parser.add_argument('--output_suffix', type=str, default=None,
+                        help='override config output_suffix (e.g. processed_script so ROS-extracted processed dirs are not overwritten)')
     args = parser.parse_args()
     
     config = yaml.safe_load(open(args.config, 'r'))
+    output_suffix = args.output_suffix if args.output_suffix else config['output_suffix']
     
     calib_dict = read_kalibr_stereo(config)
     
@@ -112,8 +115,8 @@ if __name__ == '__main__':
     print(f"Found {len(left_imgs)} left images and {len(right_imgs)} right images")
     assert len(left_imgs) == len(right_imgs), "Left and right image directories must have the same number of images"
 
-    left_out_dir = os.path.join(args.dataset, f"{config['left_dir']}_{config['output_suffix']}")
-    right_out_dir = os.path.join(args.dataset, f"{config['right_dir']}_{config['output_suffix']}")
+    left_out_dir = os.path.join(args.dataset, f"{config['left_dir']}_{output_suffix}")
+    right_out_dir = os.path.join(args.dataset, f"{config['right_dir']}_{output_suffix}")
     os.makedirs(left_out_dir, exist_ok=True)
     os.makedirs(right_out_dir, exist_ok=True)
     
