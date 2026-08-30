@@ -84,8 +84,7 @@ def compare_side(ros_dir, script_dir):
 def print_opencv_flags():
     print(f"[thermal_verify] cv2={cv2.__version__} file={cv2.__file__}")
     print(f"[thermal_verify] ocl.have={cv2.ocl.haveOpenCL()} ocl.use={cv2.ocl.useOpenCL()}")
-    print(f"[thermal_verify] AVX2={cv2.checkHardwareSupport(cv2.CPU_AVX2)} "
-          f"AVX512_SKX={cv2.checkHardwareSupport(cv2.CPU_AVX512_SKX)}")
+    print(f"[thermal_verify] build information: {cv2.getBuildInformation()}")
 
 
 def main():
