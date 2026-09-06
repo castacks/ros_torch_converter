@@ -1,7 +1,26 @@
-"""OSMO dataset discovery + conversion pipeline driver.
+"""Dataset discovery + conversion pipeline driver.
 Runs two phases per batch of pending bags:
   1. reannotate
   2. convert
+
+Usage:
+  dataset_pipeline.py [RUN_DIR ...] [flags] [-- converter args]
+
+RUN_DIRs are relative to --root_dir; every path is re-rooted to match, so results
+land at <dst_dir>/<RUN_DIR>/... No RUN_DIR means everything under --root_dir.
+Flags default to the matching env var (ROOT_DIR, DST_DIR, ...), which is how the
+OSMO wrapper passes them; see --help.
+
+Local, whole tree:
+  dataset_pipeline.py --local --root_dir ~/bags --dst_dir ~/datasets/day1
+
+Local, two runs, extra converter flags:
+  dataset_pipeline.py --local --root_dir ~/bags --dst_dir ~/datasets/day1 \
+    2026-08-21/run_01 2026-08-21/run_02 -- --rectify --color
+
+Remote (what the OSMO workflow does), paths are rclone-remote-relative:
+  ROOT_DIR=offroad/rosbags/20260821 DST_DIR=offroad_osmo_dataset/Datasets/20260821 \
+  DST_REMOTE=airlab_s3 dataset_pipeline.py teleop/run_01
 """
 
 import argparse
@@ -19,9 +38,8 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import yaml
 
 from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, load_yaml
-from tartandriver_utils.rclone_stager import RcloneStager
 
-from headless_bag_reannotation import (REANNOTATION_DEFAULTS, bag_has_topics,
+from headless_bag_reannotation import (REANNOTATION_DEFAULTS, present_topics,
                                        config_regenerated_topics, load_reannotation_settings,
                                        reannotate_bag, resolve_deploy_path)
 from bag_message_report import build_report, write_report
@@ -36,9 +54,13 @@ CONVERTER_PACKAGE_DIR = os.path.dirname(SCRIPT_DIR)
 
 
 def resolve_config_path(path):
-    """Resolve `path` against the ros_torch_converter package dir if it isn't already absolute."""
+    """Absolute paths as given; else cwd-relative if that exists (so a standalone run
+    can point at a config the way the shell tab-completed it), else resolved against
+    the ros_torch_converter package dir."""
     if os.path.isabs(path):
         return path
+    if os.path.exists(path):
+        return os.path.abspath(path)
     return os.path.join(CONVERTER_PACKAGE_DIR, path)
 
 
@@ -235,7 +257,7 @@ def is_excluded(relpath, exclude_names, exclude_prefixes):
                  if relpath == p or relpath.startswith(p + "/")), None)
 
 
-def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager=None, data_dir=None):
+def find_rosbag_run_dirs(root_dir, exclude_subdirs, stager=None, data_dir=None):
     """Find run-dirs under root_dir with >=1 non-empty .mcap, at any depth.
 
     Returns (run_dirs, needs_reindex): `needs_reindex` is the subset whose metadata.yaml
@@ -257,8 +279,6 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager
 
     run_dirs, needs_reindex = [], set()
     for relpath, sizes in sizes_by_dir.items():
-        if limit_subfolder is not None and relpath != limit_subfolder:
-            continue
         excluded = is_excluded(relpath, exclude_names, exclude_prefixes)
         if excluded:
             if excluded is not True:
@@ -273,7 +293,7 @@ def find_rosbag_run_dirs(root_dir, exclude_subdirs, limit_subfolder=None, stager
     # A path exclusion is root-relative; one that matches nothing is usually a full
     # path pasted in by mistake, which would otherwise silently exclude nothing.
     unmatched = sorted(exclude_prefixes - matched_prefixes)
-    if unmatched and limit_subfolder is None:
+    if unmatched:
         print(f"[discovery] WARNING: path exclusion(s) matched no directory under "
               f"root_dir -- they must be relative to it: {unmatched}", flush=True)
 
@@ -304,7 +324,8 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 
 def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None,
                                  annotation_topics=None, force=False):
-    """Split `relpaths` into (needs_reannotation, unreadable): bags whose raw metadata.yaml
+    """Split `relpaths` into (needs_reannotation, unreadable): {relpath: missing topics}
+    for bags whose raw metadata.yaml
     is missing any of `annotation_topics` (the reannotate_config's `rosbag_record.topics`
     minus `reannotation.shared_topics`), and bags whose metadata.yaml couldn't be read at
     all. With `force` (reannotation.force) or no `annotation_topics` to check against 
@@ -315,8 +336,9 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
     already staged in full and whose rebuilt metadata is read straight off disk."""
     prestaged = prestaged or {}
     annotation_topics = list(annotation_topics or [])
+    force_flag = force  # vs. force implied by there being no topics to test against
     force = force or not annotation_topics
-    needed, unreadable = [], []
+    needed, unreadable = {}, []
     for relpath in relpaths:
         tmpdir = None
         try:
@@ -328,8 +350,21 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
                 bag_dir = tmpdir
             else:
                 bag_dir = os.path.join(data_dir, root_dir, relpath)
-            if force or not bag_has_topics(bag_dir, annotation_topics):
-                needed.append(relpath)
+            if force:
+                reason = ("reannotation.force=true" if not annotation_topics or force_flag
+                          else "no annotation topics to test against")
+                print(f"[reannotate] {relpath or '.'}: {reason} -- reannotating", flush=True)
+                needed[relpath] = None  # force: record the whole configured topic list
+            else:
+                missing = [t for t in annotation_topics
+                           if t not in present_topics(bag_dir, annotation_topics)]
+                if missing:
+                    print(f"[reannotate] {relpath or '.'}: missing {', '.join(missing)} "
+                          f"-- reannotating", flush=True)
+                    needed[relpath] = missing
+                else:
+                    print(f"[reannotate] {relpath or '.'}: has all "
+                          f"{len(annotation_topics)} annotation topic(s) -- skipping", flush=True)
         except Exception as e:
             # One unreadable metadata.yaml must not take down the whole batch.
             print(f"[reannotate] SKIP {relpath}: cannot read metadata.yaml: {e}", flush=True)
@@ -341,9 +376,9 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
 
 
 def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_scratch_root,
-                   dst_dir, pipeline_config, reannotate_config, reannotate_settings,
+                   dst_dir, convert_config, reannotate_config, reannotate_settings,
                    domain_queue, stager, data_dir, dst_stager=None, prestaged_dir=None,
-                   forced_topics=()):
+                   forced_topics=(), record_only=None):
     reannotated_dir = reannotate_settings["reannotated_dir"]
     domain_id = None
     try:
@@ -366,7 +401,8 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
         merged_root = os.path.join(merged_scratch_root, relpath)
         reann_kwargs = {"config_path": reannotate_config} if reannotate_config else {}
         merged_dir = reannotate_bag(orig_dir, merged_root, domain_id=domain_id,
-                                    settings=reannotate_settings, **reann_kwargs)
+                                    settings=reannotate_settings,
+                                    record_only=record_only, **reann_kwargs)
         copy_bag_metadata(orig_dir, merged_dir)
 
         out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
@@ -376,7 +412,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
                                    remap_prefix=reannotate_settings["remap_prefix"])
         write_report(report_rows, os.path.join(out_dir, "reannotate_report"))
         try:
-            render_sync_viz(merged_dir, resolve_config_path(pipeline_config),
+            render_sync_viz(merged_dir, resolve_config_path(convert_config),
                              os.path.join(out_dir, "topic_sync_viz.png"),
                              out_csv=os.path.join(out_dir, "topic_sync_viz.csv"))
         except Exception as e:
@@ -384,14 +420,16 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 
         if reannotated_dir:
             upload_stager = dst_stager or stager
+            bag_dst_relpath = os.path.join(dst_dir, reannotated_dir, relpath)
             if upload_stager:
-                bag_dst_relpath = os.path.join(dst_dir, reannotated_dir, relpath)
                 print(f"[reannotate] {relpath}: copying reannotated bag to "
                       f"{upload_stager.remote}:{bag_dst_relpath} ...", flush=True)
                 upload_stager.copy_out(merged_dir, bag_dst_relpath)
             else:
-                print(f"[reannotate] {relpath}: no stager configured -- skipping "
-                      f"reannotated_dir save", flush=True)
+                local_dst = os.path.join(data_dir, bag_dst_relpath)
+                print(f"[reannotate] {relpath}: copying reannotated bag to "
+                      f"{local_dst} ...", flush=True)
+                shutil.copytree(merged_dir, local_dst, dirs_exist_ok=True)
 
         return relpath, True, None, merged_dir
     except Exception as e:
@@ -401,7 +439,7 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
             domain_queue.put(domain_id)  # release the domain for the next bag
 
 
-def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_args,
+def convert_one(relpath, root_dir, dst_dir, convert_config, converter_extra_args,
                 render_video, video_config, kitti_out_root, stager, data_dir,
                 local_out_dir, converter_workers, dst_stager=None, extra_dst_dir="",
                 merged_bag_dir=None, orig_bag_dir=None, merged_scratch_dir=None,
@@ -430,7 +468,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
         sync_viz_csv_path = os.path.join(out_dir, "topic_sync_viz.csv")
         if not os.path.exists(sync_viz_csv_path):  # phase 1 (reannotate) may have already written it
             try:
-                render_sync_viz(src_dir, resolve_config_path(pipeline_config),
+                render_sync_viz(src_dir, resolve_config_path(convert_config),
                                 os.path.join(out_dir, "topic_sync_viz.png"),
                                 out_csv=sync_viz_csv_path)
             except Exception as e:
@@ -438,7 +476,7 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
 
         cmd = [
             sys.executable, CONVERTER_SCRIPT,
-            "--config", resolve_config_path(pipeline_config),
+            "--config", resolve_config_path(convert_config),
             "--src_dir", src_dir,
             "--dst_dir", out_dir,
             "--force",
@@ -501,13 +539,17 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             print(f"[convert] {relpath}: copying result to {local_dst} ...", flush=True)
             shutil.copytree(primary_src, local_dst, dirs_exist_ok=True)
 
-        if extra_dst_dir and stager:
+        if extra_dst_dir:
             extra_relpath = os.path.join(extra_dst_dir, dataset_relpath(relpath))
-            print(f"[convert] {relpath}: also copying result to {stager.remote}:{extra_relpath} ...", flush=True)
+            extra_dst = f"{stager.remote}:{extra_relpath}" if stager else os.path.join(data_dir, extra_relpath)
+            print(f"[convert] {relpath}: also copying result to {extra_dst} ...", flush=True)
             try:
-                stager.copy_out(out_dir, extra_relpath)
-            except subprocess.CalledProcessError as e:
-                extra_error = f"extra copy-back to {stager.remote}:{extra_relpath} failed: {e}"
+                if stager:
+                    stager.copy_out(out_dir, extra_relpath)
+                else:
+                    shutil.copytree(out_dir, extra_dst, dirs_exist_ok=True)
+            except (subprocess.CalledProcessError, OSError) as e:
+                extra_error = f"extra copy-back to {extra_dst} failed: {e}"
                 print(f"[convert] {relpath}: {extra_error}", flush=True)
                 copy_error = f"{copy_error}; {extra_error}" if copy_error else extra_error
 
@@ -530,27 +572,30 @@ def convert_one(relpath, root_dir, dst_dir, pipeline_config, converter_extra_arg
             shutil.rmtree(out_dir, ignore_errors=True)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--root_dir", required=True, help="root to scan for run-dirs (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
-    parser.add_argument("--dst_dir", required=True, help="destination for the final KITTI copy-back (rclone-remote-relative, or data_dir-relative if --data_dir is set)")
-    parser.add_argument("--data_dir", default="", help="local mount root for full-copy mode (bulk_copy.sh); when set, reads/writes go straight to this mount instead of through an RcloneStager")
-    parser.add_argument("--dst_remote", default="", help="rclone remote for the destination copy-back (dst_dir) and the already-converted check; defaults to the source remote (ignored in --data_dir mode)")
-    parser.add_argument("--extra_dst_dir", default="", help="if set, also copy each converted KITTI dataset to this path on the *source* remote (stager) after the primary dst_dir copy-back -- e.g. mirror results back to the on-prem airlab_storage server in addition to --dst_remote/--dst_dir. Ignored in --data_dir mode.")
-    parser.add_argument("--pipeline_config", required=True,
-                        help="path to a ros_torch_converter config yaml")
-    parser.add_argument("--limit_subfolder", default=None, help="restrict discovery to a single run-dir relpath")
-    parser.add_argument("--local_out_dir", default="", help="if set, write each converted KITTI dataset to <local_out_dir>/<relpath> and keep it there (instead of a scratch tempdir deleted after copy-back), so the caller can read results locally. With pipeline.pack_hdf5 this is the HDF5-mirror root (and where _pipeline_summary.json lands); the KITTI tree goes under --kitti_local_dir.")
-    parser.add_argument("--kitti_local_dir", default="", help="with pipeline.pack_hdf5: where the intermediate KITTI trees are written (default: a scratch tempdir removed at the end). Ignored unless pack_hdf5 is set.")
-    parser.add_argument("--num_conversion_workers", type=int, default=None, help="bags to convert at once; overrides pipeline.num_conversion_workers")
-    parser.add_argument("--num_reannotation_workers", type=int, default=None, help="bags to reannotate at once; overrides pipeline.num_reannotation_workers (default 1 -- one bag at a time so each live SLAM run gets the whole machine/GPU)")
-    parser.add_argument("--phase_batch_size", type=int, default=None, help="bags per reannotate-then-convert batch; overrides pipeline.phase_batch_size (0/unset = one batch of everything pending)")
-    parser.add_argument("--max_total_converter_workers", type=int, default=None, help="cap on converter pool workers across all bags; overrides pipeline.max_total_converter_workers (0 = use the cpu budget)")
-    parser.add_argument("--exclude_subdirs", default=None, help="comma-separated exclusions for discovery: a bare name skips that dir at any depth, an entry with a '/' skips that root-relative path and everything under it; overrides pipeline.exclude_subdirs ('' / 'none' = exclude nothing)")
-    parser.add_argument("--converter_extra_args", default=None, help="extra args passed through to the converter; overrides pipeline.converter_extra_args")
-    parser.add_argument("--reannotate_config", default=None, help="playback config driving reannotation (repo-relative or absolute); overrides pipeline.reannotate_config")
-    return parser.parse_args()
+def env_str(name, fallback=""):
+    """Env var as a flag default -- the OSMO wrapper exports env, a local run passes flags."""
+    return os.environ.get(name, "").strip() or fallback
 
+
+def env_int(name):
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else None
+
+
+def env_bool(name):
+    """Tri-state env var: True/False if set to something recognizable, else None so the
+    convert_config's value wins."""
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    if raw in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def env_list(name):
+    """Comma-separated env var as a list, or None if unset (so the config value wins)."""
+    return [s.strip() for s in os.environ.get(name, "").split(",") if s.strip()] or None
 
 def pick(cli_value, cfg_value, name):
     """CLI (env-driven) value if given, else the pipeline-config value."""
@@ -560,115 +605,51 @@ def pick(cli_value, cfg_value, name):
     return cli_value
 
 
-def main():
-    args = parse_args()
-    sys.stdout.reconfigure(line_buffering=True)
+def run_root(paths, opt, stager, dst_stager, data_dir):
+    """Discover, reannotate and convert everything under one root.
 
-    stager = RcloneStager() if not args.data_dir else None
-    dst_stager = RcloneStager(remote=args.dst_remote) if (stager and args.dst_remote) else stager
+    Returns (run_dirs, pending, succeeded, failed) for the caller's totals.
+    """
+    convert_config = opt.convert_config
+    converter_extra_args = opt.converter_extra_args
+    exclude_subdirs = opt.exclude_subdirs
+    num_conversion_workers = opt.num_conversion_workers
+    num_reannotation_workers = opt.num_reannotation_workers
+    phase_batch_size = opt.phase_batch_size
+    converter_workers = opt.converter_workers
+    render_video = opt.render_video
+    video_config = opt.video_config
+    reannotate = opt.reannotate
+    reannotate_config = opt.reannotate_config
+    reannotate_settings = opt.reannotate_settings
+    annotation_topics = opt.annotation_topics
+    forced_topics = opt.forced_topics
+    recover_truncated_mcap = opt.recover_truncated_mcap
+    pack_hdf5 = opt.pack_hdf5
+    keep_kitti_local = opt.keep_kitti_local
 
-    cfg = load_yaml(resolve_config_path(args.pipeline_config))
-    pcfg = cfg.get("pipeline", {}) or {}
-
-    num_conversion_workers = int(pick(args.num_conversion_workers,
-                                      pcfg.get("num_conversion_workers", 4),
-                                      "num_conversion_workers"))
-    num_reannotation_workers = int(pick(args.num_reannotation_workers,
-                                        pcfg.get("num_reannotation_workers", 1),
-                                        "num_reannotation_workers"))
-    phase_batch_size = int(pick(args.phase_batch_size,
-                               pcfg.get("phase_batch_size", 0) or 0,
-                               "phase_batch_size") or 0)
-    converter_extra_args = pick(args.converter_extra_args,
-                                pcfg.get("converter_extra_args", "") or "",
-                                "converter_extra_args") or ""
-    render_video = bool(pcfg.get("render_video", True))
-    video_config = pcfg.get("video_config", "") or ""
-    reannotate = bool(pcfg.get("reannotate", False))
-    recover_truncated_mcap = bool(pcfg.get("recover_truncated_mcap", True))
-    pack_hdf5 = bool(pcfg.get("pack_hdf5", False))
-    keep_kitti_local = bool(pcfg.get("keep_kitti_local", True))
-    reannotate_config_arg = pick(args.reannotate_config,
-                                 pcfg.get("reannotate_config", "") or "",
-                                 "reannotate_config") or ""
-
-    exclude_subdirs_raw = str(pick(args.exclude_subdirs,
-                                   pcfg.get("exclude_subdirs", "calibration"),
-                                   "exclude_subdirs") or "")
-    if exclude_subdirs_raw.strip().lower() in ("", "none"):
-        exclude_subdirs = set()
-    else:
-        exclude_subdirs = {s.strip() for s in exclude_subdirs_raw.split(",") if s.strip()}
-
-    scratch_root = args.data_dir or tempfile.gettempdir()
-    stop_memory_logger = start_memory_logger(scratch_root)
-
-    cpu_budget = available_cpus()
-    max_total = int(pick(args.max_total_converter_workers,
-                         pcfg.get("max_total_converter_workers", 0) or 0,
-                         "max_total_converter_workers") or 0)
-    worker_budget = min(cpu_budget, max_total) if max_total > 0 else cpu_budget
-    converter_workers = max(1, worker_budget // max(1, num_conversion_workers))
-    if "--num_workers" in converter_extra_args:
-        print(f"[cpu] budget {cpu_budget} cpus; --num_workers pinned by "
-              f"converter_extra_args ({converter_extra_args.strip()})")
-    else:
-        print(f"[cpu] budget {cpu_budget} cpus, worker budget {worker_budget} / "
-              f"{num_conversion_workers} concurrent bag(s) -> --num_workers "
-              f"{converter_workers} each ({converter_workers * num_conversion_workers} total)")
-
-    scan_location = f"{stager.remote}:{args.root_dir}" if stager else os.path.join(args.data_dir, args.root_dir)
+    scan_location = f"{stager.remote}:{paths.root_dir}" if stager else os.path.join(data_dir, paths.root_dir)
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
     run_dirs, needs_reindex = find_rosbag_run_dirs(
-        args.root_dir, exclude_subdirs, limit_subfolder=args.limit_subfolder,
-        stager=stager, data_dir=args.data_dir)
+        paths.root_dir, exclude_subdirs, stager=stager, data_dir=data_dir)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
-    pending = filter_unconverted(run_dirs, args.dst_dir, stager=dst_stager, data_dir=args.data_dir)
+    pending = filter_unconverted(run_dirs, paths.dst_dir, stager=dst_stager, data_dir=data_dir)
     print(f"[discovery] {len(pending)} pending (not yet converted)")
-
-    reannotate_config, reannotate_settings = "", dict(REANNOTATION_DEFAULTS)
-    annotation_topics, forced_topics = [], []
-    if reannotate:
-        assert reannotate_config_arg, "pipeline.reannotate_config is required when pipeline.reannotate is true"
-        reannotate_config = resolve_deploy_path(reannotate_config_arg)
-        reannotate_settings = load_reannotation_settings(reannotate_config)
-        reannotated_dir = reannotate_settings["reannotated_dir"]
-        annotation_topics = config_regenerated_topics(reannotate_config, reannotate_settings)
-        # tags the reports: which topics a bag that already had them got regenerated over
-        forced_topics = annotation_topics if reannotate_settings["force"] else []
-        if reannotate_settings["force"]:
-            print(f"[reannotate] enabled (config={reannotate_config}), force=true -- every "
-                  f"pending bag is reannotated, {num_reannotation_workers} at a time; bags "
-                  f"that already have {annotation_topics} keep those copies under "
-                  f"{reannotate_settings['remap_prefix']} and get fresh ones on the "
-                  f"original names")
-        elif annotation_topics:
-            print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing any of "
-                  f"{annotation_topics} (rosbag_record.topics minus "
-                  f"{reannotate_settings['shared_topics']}) will be reannotated first, "
-                  f"{num_reannotation_workers} at a time")
-        else:
-            print(f"[reannotate] enabled (config={reannotate_config}) -- rosbag_record.topics "
-                  f"is 'all', so there's nothing to test a bag against: every pending bag "
-                  f"will be reannotated, {num_reannotation_workers} at a time")
-        if reannotated_dir:
-            print(f"[reannotate] merged reannotated bags will also be uploaded to "
-                  f"{reannotated_dir}")
 
     orig_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_orig_")
     merged_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_merged_")
     if pack_hdf5:
-        h5_out_root = args.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_h5scratch_")
-        kitti_out_root = args.kitti_local_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
+        h5_out_root = paths.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_h5scratch_")
+        kitti_out_root = paths.kitti_local_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
     else:
         h5_out_root = ""
-        kitti_out_root = args.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
+        kitti_out_root = paths.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
     print(f"[config] pack_hdf5={pack_hdf5}"
           + (f" (h5 -> {h5_out_root}, kitti -> {kitti_out_root}, "
              f"keep_kitti_local={keep_kitti_local})" if pack_hdf5 else ""))
 
-    summary_path = os.path.join(args.local_out_dir, "_pipeline_summary.json") if args.local_out_dir else None
+    summary_path = os.path.join(paths.local_out_dir, "_pipeline_summary.json") if paths.local_out_dir else None
     summary = []
 
     def flush_summary():
@@ -701,11 +682,11 @@ def main():
                 bag_dir = os.path.join(orig_scratch_root, relpath)
                 os.makedirs(bag_dir, exist_ok=True)
             else:
-                bag_dir = os.path.join(args.data_dir, args.root_dir, relpath)
+                bag_dir = os.path.join(data_dir, paths.root_dir, relpath)
             try:
                 if stager:
                     print(f"[reindex] {relpath}: copying raw bag from {stager.remote} ...", flush=True)
-                    stager.copy_in(os.path.join(args.root_dir, relpath), bag_dir)
+                    stager.copy_in(os.path.join(paths.root_dir, relpath), bag_dir)
                 recovery_actions = repair_bag_metadata(
                     bag_dir, relpath, recover_truncated=recover_truncated_mcap)
                 if stager:
@@ -735,7 +716,7 @@ def main():
         merged_by_relpath = {}
         if reannotate and remaining:
             needs_reannotation, unreadable = classify_reannotation_needed(
-                remaining, args.root_dir, stager, args.data_dir, prestaged,
+                remaining, paths.root_dir, stager, data_dir, prestaged,
                 annotation_topics=annotation_topics,
                 force=reannotate_settings["force"])
             for relpath, err in unreadable:
@@ -757,11 +738,12 @@ def main():
                     for relpath in needs_reannotation:
                         submit_times[relpath] = time.time()
                         futures[pool.submit(
-                            reannotate_one, relpath, args.root_dir, kitti_out_root,
-                            orig_scratch_root, merged_scratch_root, args.dst_dir,
-                            args.pipeline_config, reannotate_config, reannotate_settings,
-                            domain_queue, stager, args.data_dir, dst_stager,
+                            reannotate_one, relpath, paths.root_dir, kitti_out_root,
+                            orig_scratch_root, merged_scratch_root, paths.dst_dir,
+                            convert_config, reannotate_config, reannotate_settings,
+                            domain_queue, stager, data_dir, dst_stager,
                             prestaged.get(relpath), forced_topics,
+                            needs_reannotation[relpath],
                         )] = relpath
                     for future in as_completed(futures):
                         relpath, ok, err, merged_dir = future.result()
@@ -795,15 +777,15 @@ def main():
                     elif stager:
                         orig_dir = os.path.join(orig_scratch_root, relpath)
                     else:
-                        orig_dir = os.path.join(args.data_dir, args.root_dir, relpath)
+                        orig_dir = os.path.join(data_dir, paths.root_dir, relpath)
                     merged_scratch_dir = os.path.join(merged_scratch_root, relpath) if merged_dir else None
                     submit_times[relpath] = time.time()
                     futures[pool.submit(
-                        convert_one, relpath, args.root_dir, args.dst_dir,
-                        args.pipeline_config, converter_extra_args,
+                        convert_one, relpath, paths.root_dir, paths.dst_dir,
+                        convert_config, converter_extra_args,
                         render_video, video_config, kitti_out_root,
-                        stager, args.data_dir, args.local_out_dir, converter_workers,
-                        dst_stager, args.extra_dst_dir, merged_dir, orig_dir,
+                        stager, data_dir, paths.local_out_dir, converter_workers,
+                        dst_stager, paths.extra_dst_dir, merged_dir, orig_dir,
                         merged_scratch_dir, prestaged.get(relpath),
                         forced_topics, reannotate_settings["remap_prefix"],
                         pack_hdf5, h5_out_root, keep_kitti_local,
@@ -829,20 +811,261 @@ def main():
 
     shutil.rmtree(orig_scratch_root, ignore_errors=True)
     shutil.rmtree(merged_scratch_root, ignore_errors=True)
-    if kitti_out_root not in (args.local_out_dir, args.kitti_local_dir):
+    if kitti_out_root not in (paths.local_out_dir, paths.kitti_local_dir):
         shutil.rmtree(kitti_out_root, ignore_errors=True)
-    if pack_hdf5 and h5_out_root and h5_out_root != args.local_out_dir:
+    if pack_hdf5 and h5_out_root and h5_out_root != paths.local_out_dir:
         shutil.rmtree(h5_out_root, ignore_errors=True)
+
+    print(f"[summary] {paths.label}found={len(run_dirs)} pending={len(pending)} "
+          f"converted={len(succeeded)} failed={len(failed)}")
+    return run_dirs, pending, succeeded, failed
+
+def scope_to_run_dir(args, run_dir):
+    """Every path in `args` re-rooted at `run_dir`, so a run found at
+    <root_dir>/<run_dir>/<rel> lands at <dst_dir>/<run_dir>/<rel> -- the same place a
+    whole-root run would put it. A run_dir naming a bag dir directly (`<run>/rosbags`)
+    drops that segment on the destination side, matching dataset_relpath()."""
+    rel = run_dir.strip("/")
+    if ".." in rel.split("/"):
+        sys.exit(f"[config] run dirs are relative to --root_dir, got {run_dir!r}")
+    dst_rel = os.path.dirname(rel) if rel.split("/")[-1] == "rosbags" else rel
+
+    def under(base, sub):
+        return os.path.join(base, sub) if (base and sub) else base
+
+    return argparse.Namespace(
+        label=f"{rel}: " if rel else "",
+        root_dir=under(args.root_dir, rel),
+        dst_dir=under(args.dst_dir, dst_rel),
+        extra_dst_dir=under(args.extra_dst_dir, dst_rel),
+        local_out_dir=under(args.local_out_dir, dst_rel),
+        kitti_local_dir=under(args.kitti_local_dir, dst_rel),
+    )
+
+
+def main():
+    sys.stdout.reconfigure(line_buffering=True)
+
+    # Everything after a bare `--` goes to the converter, e.g. `-- --rectify --color`.
+    argv, passthrough = sys.argv[1:], ""
+    if "--" in argv:
+        split = argv.index("--")
+        argv, passthrough = argv[:split], " ".join(argv[split + 1:])
+
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("run_dirs", nargs="*", metavar="RUN_DIR",
+                        help="run dirs to convert, each relative to --root_dir. Every path is "
+                             "re-rooted to match, so results land at <dst_dir>/<RUN_DIR>/... "
+                             "however deep the RUN_DIR points; one ending in 'rosbags' drops "
+                             "that segment. Default: everything under --root_dir.")
+    parser.add_argument("--root_dir", default=env_str("ROOT_DIR"),
+                        help="root to scan for run-dirs. A plain path with --local, else "
+                             "rclone-remote-relative. Env: ROOT_DIR")
+    parser.add_argument("--dst_dir", default=env_str("DST_DIR"),
+                        help="where converted datasets land. Env: DST_DIR")
+    parser.add_argument("--convert_config", default=env_str("CONVERT_CONFIG",
+                                                            "config/kitti_config/generate_dataset.yaml"),
+                        help="ros_torch_converter config yaml, also the source of the pipeline: "
+                             "block (reannotate, pack_hdf5, worker counts, ...). Resolved "
+                             "cwd-relative, else against the ros_torch_converter package. "
+                             "Env: CONVERT_CONFIG")
+    parser.add_argument("--local", action="store_true",
+                        help="run against the local filesystem: paths are ordinary paths, no "
+                             "rclone remote is configured and no staging happens")
+    parser.add_argument("--exclude", nargs="+", metavar="NAME_OR_PATH", default=env_list("EXCLUDE_SUBDIRS"),
+                        help="skip these in discovery: a bare name skips that dir at any depth, "
+                             "an entry with a '/' skips that root-relative path and everything "
+                             "under it. Overrides pipeline.exclude_subdirs ('none' = exclude "
+                             "nothing). Env: EXCLUDE_SUBDIRS (comma-separated)")
+
+    remote = parser.add_argument_group("remote mode (OSMO)")
+    remote.add_argument("--dst_remote", default=env_str("DST_REMOTE"),
+                        help="rclone remote for dst_dir and the already-converted check; "
+                             "defaults to the source remote. Env: DST_REMOTE")
+    remote.add_argument("--extra_dst_dir", default=env_str("EXTRA_DST_DIR"),
+                        help="also copy each converted KITTI tree here, on the source remote. "
+                             "Env: EXTRA_DST_DIR")
+    remote.add_argument("--data_dir", default=env_str("DATA_DIR"),
+                        help="local mount root for full-copy mode (bulk_copy.sh). Use --local "
+                             "for an ordinary local run. Env: DATA_DIR")
+    remote.add_argument("--local_out_dir", default=env_str("LOCAL_OUT_DIR"),
+                        help="keep each result under <local_out_dir>/<relpath> instead of a "
+                             "scratch tempdir, so a sweep on exit can still find it. Also where "
+                             "_pipeline_summary.json lands. Env: LOCAL_OUT_DIR")
+    remote.add_argument("--kitti_local_dir", default=env_str("KITTI_LOCAL_DIR"),
+                        help="with pipeline.pack_hdf5: where intermediate KITTI trees go. "
+                             "Env: KITTI_LOCAL_DIR")
+
+    over = parser.add_argument_group("overrides for the convert_config's pipeline: block")
+    over.add_argument("--num_conversion_workers", type=int, default=env_int("NUM_CONVERSION_WORKERS"),
+                      help="bags to convert at once. Env: NUM_CONVERSION_WORKERS")
+    over.add_argument("--num_reannotation_workers", type=int, default=env_int("NUM_REANNOTATION_WORKERS"),
+                      help="bags to reannotate at once (default 1, so each live SLAM run gets "
+                           "the whole GPU). Env: NUM_REANNOTATION_WORKERS")
+    over.add_argument("--phase_batch_size", type=int, default=env_int("PHASE_BATCH_SIZE"),
+                      help="bags per reannotate-then-convert batch (0 = one batch of "
+                           "everything). Env: PHASE_BATCH_SIZE")
+    over.add_argument("--max_total_converter_workers", type=int, default=env_int("MAX_TOTAL_CONVERTER_WORKERS"),
+                      help="cap on converter workers across all bags in flight (0 = the cpu "
+                           "budget). Env: MAX_TOTAL_CONVERTER_WORKERS")
+    over.add_argument("--pack_hdf5", action=argparse.BooleanOptionalAction, default=env_bool("PACK_HDF5"),
+                      help="pack each KITTI tree into an HDF5 mirror and send that to "
+                           "--dst_dir. --no-pack_hdf5 sends the KITTI tree itself. "
+                           "Env: PACK_HDF5")
+    over.add_argument("--render_video", action=argparse.BooleanOptionalAction, default=env_bool("RENDER_VIDEO"),
+                      help="render the per-run video after conversion. Env: RENDER_VIDEO")
+    over.add_argument("--reannotate", action=argparse.BooleanOptionalAction, default=env_bool("REANNOTATE"),
+                      help="run the reannotation phase before converting. Env: REANNOTATE")
+    over.add_argument("--reannotate_config", default=env_str("REANNOTATE_CONFIG") or None,
+                      help="playback config driving reannotation. Env: REANNOTATE_CONFIG")
+
+    args = parser.parse_args(argv)
+    if not args.root_dir or not args.dst_dir:
+        sys.exit("[config] --root_dir and --dst_dir are required (or set ROOT_DIR / DST_DIR)")
+
+    # A literal "$" means a var the shell never expanded (quoted or backslash-escaped
+    # by mistake) -- taken as-is it would silently write to a dir named "$FOO".
+    for name in ("root_dir", "dst_dir", "extra_dst_dir", "local_out_dir", "kitti_local_dir"):
+        value = getattr(args, name)
+        if "$" in value:
+            sys.exit(f"[config] --{name} contains an unexpanded variable: {value}\n"
+                     f"          drop the backslash/quotes so the shell expands it")
+
+    # --local is --data_dir rooted at "/", i.e. every path is taken as-is off the
+    # local filesystem. os.path.join("/", "/abs/path") -> "/abs/path", so the rest
+    # of the script's data_dir handling needs no special case.
+    if args.local:
+        if args.data_dir:
+            sys.exit("[config] --local and --data_dir are alternatives -- pass one")
+        args.data_dir = "/"
+        for name in ("root_dir", "dst_dir", "extra_dst_dir", "local_out_dir", "kitti_local_dir"):
+            value = getattr(args, name)
+            if value:
+                setattr(args, name, os.path.abspath(os.path.expanduser(value)))
+
+    # Only remote mode needs rclone, so the stager (and its import) stays out of
+    # the way of a standalone run.
+    if args.data_dir:
+        stager = dst_stager = None
+    else:
+        from tartandriver_utils.rclone_stager import RcloneStager
+        stager = RcloneStager()
+        dst_stager = RcloneStager(remote=args.dst_remote) if args.dst_remote else stager
+
+    cfg = load_yaml(resolve_config_path(args.convert_config))
+    pcfg = cfg.get("pipeline", {}) or {}
+
+    num_conversion_workers = int(pick(args.num_conversion_workers,
+                                      pcfg.get("num_conversion_workers", 4),
+                                      "num_conversion_workers"))
+    num_reannotation_workers = int(pick(args.num_reannotation_workers,
+                                        pcfg.get("num_reannotation_workers", 1),
+                                        "num_reannotation_workers"))
+    phase_batch_size = int(pick(args.phase_batch_size,
+                                pcfg.get("phase_batch_size", 0) or 0,
+                                "phase_batch_size") or 0)
+    converter_extra_args = pick(passthrough or None,
+                                pcfg.get("converter_extra_args", "") or "",
+                                "converter_extra_args") or ""
+    exclude_list = pick(args.exclude,
+                        [s.strip() for s in str(pcfg.get("exclude_subdirs", "calibration")).split(",")],
+                        "exclude_subdirs")
+    exclude_subdirs = {s for s in exclude_list if s and s.lower() != "none"}
+    reannotate = bool(pick(args.reannotate, pcfg.get("reannotate", False), "reannotate"))
+    pack_hdf5 = bool(pick(args.pack_hdf5, pcfg.get("pack_hdf5", False), "pack_hdf5"))
+    render_video = bool(pick(args.render_video, pcfg.get("render_video", True), "render_video"))
+    reannotate_config_arg = pick(args.reannotate_config,
+                                 pcfg.get("reannotate_config", "") or "",
+                                 "reannotate_config") or ""
+
+    cpu_budget = available_cpus()
+    max_total = int(pick(args.max_total_converter_workers,
+                         pcfg.get("max_total_converter_workers", 0) or 0,
+                         "max_total_converter_workers") or 0)
+    worker_budget = min(cpu_budget, max_total) if max_total > 0 else cpu_budget
+    converter_workers = max(1, worker_budget // max(1, num_conversion_workers))
+    if "--num_workers" in converter_extra_args:
+        print(f"[cpu] budget {cpu_budget} cpus; --num_workers pinned by "
+              f"converter_extra_args ({converter_extra_args.strip()})")
+    else:
+        print(f"[cpu] budget {cpu_budget} cpus, worker budget {worker_budget} / "
+              f"{num_conversion_workers} concurrent bag(s) -> --num_workers "
+              f"{converter_workers} each ({converter_workers * num_conversion_workers} total)")
+
+    reannotate_config, reannotate_settings = "", dict(REANNOTATION_DEFAULTS)
+    annotation_topics, forced_topics = [], []
+    if reannotate:
+        assert reannotate_config_arg, "pipeline.reannotate_config is required when pipeline.reannotate is true"
+        reannotate_config = resolve_deploy_path(reannotate_config_arg)
+        reannotate_settings = load_reannotation_settings(reannotate_config)
+        annotation_topics = config_regenerated_topics(reannotate_config, reannotate_settings)
+        # tags the reports: which topics a bag that already had them got regenerated over
+        forced_topics = annotation_topics if reannotate_settings["force"] else []
+        if reannotate_settings["force"]:
+            print(f"[reannotate] enabled (config={reannotate_config}), force=true -- every "
+                  f"pending bag is reannotated, {num_reannotation_workers} at a time; bags "
+                  f"that already have {annotation_topics} keep those copies under "
+                  f"{reannotate_settings['remap_prefix']} and get fresh ones on the "
+                  f"original names")
+        elif annotation_topics:
+            print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing any of "
+                  f"{annotation_topics} (rosbag_record.topics minus "
+                  f"{reannotate_settings['shared_topics']}) will be reannotated first, "
+                  f"{num_reannotation_workers} at a time")
+        else:
+            print(f"[reannotate] enabled (config={reannotate_config}) -- rosbag_record.topics "
+                  f"is 'all', so there's nothing to test a bag against: every pending bag "
+                  f"will be reannotated, {num_reannotation_workers} at a time")
+        if reannotate_settings["reannotated_dir"]:
+            print(f"[reannotate] merged reannotated bags will also be uploaded to "
+                  f"{reannotate_settings['reannotated_dir']}")
+
+    opt = argparse.Namespace(
+        convert_config=args.convert_config,
+        converter_extra_args=converter_extra_args,
+        exclude_subdirs=exclude_subdirs,
+        num_conversion_workers=num_conversion_workers,
+        num_reannotation_workers=num_reannotation_workers,
+        phase_batch_size=phase_batch_size,
+        converter_workers=converter_workers,
+        render_video=render_video,
+        video_config=pcfg.get("video_config", "") or "",
+        reannotate=reannotate,
+        reannotate_config=reannotate_config,
+        reannotate_settings=reannotate_settings,
+        annotation_topics=annotation_topics,
+        forced_topics=forced_topics,
+        recover_truncated_mcap=bool(pcfg.get("recover_truncated_mcap", True)),
+        pack_hdf5=pack_hdf5,
+        keep_kitti_local=bool(pcfg.get("keep_kitti_local", True)),
+    )
+
+    stop_memory_logger = start_memory_logger(args.data_dir or tempfile.gettempdir())
+
+    run_dirs = args.run_dirs or [""]
+    if args.run_dirs:
+        print(f"[config] {len(run_dirs)} run dir(s) under {args.root_dir}: {' '.join(run_dirs)}")
+    totals = {"found": 0, "pending": 0, "converted": 0}
+    failures = []
+    for run_dir in run_dirs:
+        paths = scope_to_run_dir(args, run_dir)
+        if run_dir:
+            print(f"\n[run_dir] {run_dir} -> {paths.dst_dir}")
+        found, pending, succeeded, failed = run_root(paths, opt, stager, dst_stager, args.data_dir)
+        totals["found"] += len(found)
+        totals["pending"] += len(pending)
+        totals["converted"] += len(succeeded)
+        failures += [os.path.join(run_dir, relpath) for relpath in failed]
 
     stop_memory_logger()  # quiet the [mem]/[disk] heartbeat now that all work is done
 
-    print(
-        f"[summary] found={len(run_dirs)} pending={len(pending)} "
-        f"converted={len(succeeded)} failed={len(failed)}"
-    )
-    if failed:
+    if len(run_dirs) > 1:
+        print(f"[summary] all run dirs: found={totals['found']} pending={totals['pending']} "
+              f"converted={totals['converted']} failed={len(failures)}")
+    if failures:
         print("[summary] failed run-dirs:")
-        for relpath in failed:
+        for relpath in failures:
             print(f"    {relpath}")
         sys.exit(1)
 
