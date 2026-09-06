@@ -639,6 +639,11 @@ def run_root(paths, opt, stager, dst_stager, data_dir):
 
     orig_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_orig_")
     merged_scratch_root = tempfile.mkdtemp(prefix="osmo_pipeline_merged_")
+    # Both are per-run-dir paths under the caller's scratch roots, so this run dir's
+    # subdir may not exist yet -- _pipeline_summary.json is written straight into it.
+    for scratch_dir in (paths.local_out_dir, paths.kitti_local_dir):
+        if scratch_dir:
+            os.makedirs(scratch_dir, exist_ok=True)
     if pack_hdf5:
         h5_out_root = paths.local_out_dir or tempfile.mkdtemp(prefix="osmo_pipeline_h5scratch_")
         kitti_out_root = paths.kitti_local_dir or tempfile.mkdtemp(prefix="osmo_pipeline_kittiscratch_")
