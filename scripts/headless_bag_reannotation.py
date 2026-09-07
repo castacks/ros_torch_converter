@@ -97,7 +97,11 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
         cmd = registry["launch"][key]["launch_cmd"].split()
         for k, v in (spec.get("launch_args") or {}).items():
             cmd.append(launch_arg(k, v))
-        launches.append(cmd + extra)
+        # `provides:` lets reannotate_bag skip a component whose output the bag already
+        # carries; absent means always launch.
+        launches.append({"key": key, "cmd": cmd + extra,
+                         "provides": list(spec.get("provides") or []),
+                         "provides_shared": list(spec.get("provides_shared") or [])})
 
     playback_args = (config.get("rosbag_playback", {}) or {}).get("args", {}) or {}
     remap = (playback_args.get("--remap", "") or "").split()
@@ -150,6 +154,45 @@ def present_topics(bag_dir, topics):
     return [t for t in topics if counts.get(t, 0) > 0]
 
 
+def needed_launches(launches_spec, src_dir, force=False):
+    """Drop launches whose `provides:` topics the bag already carries.
+
+    Playback republishes those topics on their original names, so anything downstream
+    still gets its input without paying to regenerate it. `force` keeps every launch:
+    it remaps the existing copies out of the way, so the live producer has to run.
+    """
+    if force:
+        return list(launches_spec)
+    kept = []
+    for launch in launches_spec:
+        provides = launch["provides"]
+        if provides and len(present_topics(src_dir, provides)) == len(provides):
+            print("[reannotate] skipping launch '{}': the bag already has {}".format(
+                launch["key"], ", ".join(provides)), flush=True)
+            continue
+        kept.append(launch)
+    return kept
+
+
+def shared_to_record(all_launches, kept_launches, shared_topics):
+    """Which `shared_topics` are worth recording, given which launches actually run.
+
+    A launch declares the shared topics it writes with `provides_shared:` (e.g. super
+    odometry writes /tf). Skip that launch and nothing regenerates those, so recording
+    them would only capture the playback echo of what the bag already has. If no launch
+    in the config declares any, every shared topic is recorded, as before.
+    """
+    declared = {t for launch in all_launches for t in launch["provides_shared"]}
+    if not declared:
+        return set(shared_topics)
+    running = {t for launch in kept_launches for t in launch["provides_shared"]}
+    dropped = sorted(set(shared_topics) & declared - running)
+    if dropped:
+        print("[reannotate] not recording {}: nothing running regenerates them".format(
+            ", ".join(dropped)), flush=True)
+    return set(shared_topics) & (running | (set(shared_topics) - declared))
+
+
 def bag_has_topics(bag_dir, topics):
     """True iff every topic in `topics` is in the bag with a non-zero message count."""
     topics = list(topics)
@@ -159,7 +202,7 @@ def bag_has_topics(bag_dir, topics):
 def load_reannotation_settings(config_path):
     """`reannotation:` block of a playback config, with REANNOTATION_DEFAULTS filled in.
 
-    Read by both this module and osmo_dataset_pipeline.py, so the block stays the one
+    Read by both this module and dataset_pipeline.py, so the block stays the one
     place these knobs are configured."""
     with open(config_path, "r") as f:
         section = (yaml.safe_load(f) or {}).get("reannotation") or {}
@@ -221,15 +264,22 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
                    config_path=DEFAULT_CONFIG, registry_path=DEFAULT_REGISTRY,
                    models_dir=None, use_sim_time=True, settle=8.0,
                    record_settle=2.0, shutdown_grace=15.0,
-                   localhost_only=True, settings=None):
+                   localhost_only=True, settings=None, record_only=None):
     """Reannotate a single bag headlessly; returns the resulting bag path (merged with
-    the untouched original when `rosbag_record.topics` is a list of topics)."""
+    the untouched original when `rosbag_record.topics` is a list of topics).
+
+    `record_only` narrows `rosbag_record.topics` to the topics this bag is actually
+    missing (plus `shared_topics`, which the stack may add to). Without it, playback
+    republishes the copies the bag already has, the recorder picks those up, and the
+    merge leaves two of everything. None = record the whole configured list, which is
+    what `force` wants."""
     if models_dir is None:
         models_dir = default_models_dir()
     settings = settings or load_reannotation_settings(config_path)
     spec = build_stack_from_config(config_path, registry_path,
                                    models_dir=models_dir, use_sim_time=use_sim_time)
-    launches = spec["launches"]
+    launches = needed_launches(launches_spec=spec["launches"], src_dir=src_dir,
+                               force=settings["force"])
     remap = list(spec["remap"])
     record_topics = spec["record_topics"]
     record_storage = spec["record_storage"]
@@ -237,6 +287,16 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
     start_offset = spec["start_offset"]
     extra_play_args = spec.get("extra_play_args", [])
     record_drain = settings["record_drain"]
+
+    if record_only is not None and record_topics != "all":
+        keep = set(record_only) | shared_to_record(spec["launches"], launches,
+                                                   settings["shared_topics"])
+        skipped = [t for t in record_topics if t not in keep]
+        record_topics = [t for t in record_topics if t in keep]
+        if skipped:
+            print("[reannotate] recording only {} -- the bag already has {}, left "
+                  "untouched".format(", ".join(record_topics), ", ".join(skipped)),
+                  flush=True)
 
     remapped = {}
     if settings["force"]:
@@ -275,7 +335,7 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
     try:
         # 1. bring up the annotation stack
         for launch in launches:
-            start(launch)
+            start(launch["cmd"])
         time.sleep(settle)
 
         # 2. record; 'all' -> -a since $ALL_TOPICS isn't available in a headless pod.

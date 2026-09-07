@@ -10,7 +10,7 @@ convert even though ~all of its chunks are intact.
 ``recover_mcap()`` walks the record framing (seek-only, cheap even on 11 GB),
 finds the last complete record, and rebuilds a valid file from that prefix --
 **in place, on the copy it is handed, never the source bag** -- matching the
-``repair_*`` / ``reindex_bag`` policy in ``osmo_dataset_pipeline.py``. Preference
+``repair_*`` / ``reindex_bag`` policy in ``dataset_pipeline.py``. Preference
 order: the Foxglove ``mcap`` CLI (``mcap recover``) if on PATH, else a
 pure-Python rebuild via the ``mcap`` package.
 
