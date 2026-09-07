@@ -98,10 +98,11 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
         for k, v in (spec.get("launch_args") or {}).items():
             cmd.append(launch_arg(k, v))
         # `provides:` lets reannotate_bag skip a component whose output the bag already
-        # carries; absent means always launch.
+        # carries; absent means always launch. Per-launch `force` keeps it anyway.
         launches.append({"key": key, "cmd": cmd + extra,
                          "provides": list(spec.get("provides") or []),
-                         "provides_shared": list(spec.get("provides_shared") or [])})
+                         "provides_shared": list(spec.get("provides_shared") or []),
+                         "force": bool(spec.get("force", False))})
 
     playback_args = (config.get("rosbag_playback", {}) or {}).get("args", {}) or {}
     remap = (playback_args.get("--remap", "") or "").split()
@@ -158,20 +159,36 @@ def needed_launches(launches_spec, src_dir, force=False):
     """Drop launches whose `provides:` topics the bag already carries.
 
     Playback republishes those topics on their original names, so anything downstream
-    still gets its input without paying to regenerate it. `force` keeps every launch:
-    it remaps the existing copies out of the way, so the live producer has to run.
+    still gets its input without paying to regenerate it. High-level `force` keeps
+    every launch. Per-launch `force` keeps that launch even when its provides are
+    already present -- existing copies are remapped out of the way so the live
+    producer has to run.
     """
     if force:
         return list(launches_spec)
     kept = []
     for launch in launches_spec:
         provides = launch["provides"]
+        if launch.get("force"):
+            kept.append(launch)
+            continue
         if provides and len(present_topics(src_dir, provides)) == len(provides):
             print("[reannotate] skipping launch '{}': the bag already has {}".format(
                 launch["key"], ", ".join(provides)), flush=True)
             continue
         kept.append(launch)
     return kept
+
+
+def kept_launch_provides(launches):
+    """Union of `provides:` across `launches`, first-seen order."""
+    topics, seen = [], set()
+    for launch in launches:
+        for topic in launch["provides"]:
+            if topic not in seen:
+                seen.add(topic)
+                topics.append(topic)
+    return topics
 
 
 def shared_to_record(all_launches, kept_launches, shared_topics):
@@ -233,6 +250,26 @@ def config_regenerated_topics(config_path, settings=None):
     return regenerated_topics(record_topics, settings["shared_topics"])
 
 
+def config_forced_launch_topics(config_path):
+    """`provides:` of launches with `force: true`, in config order.
+
+    Used by dataset_pipeline.py to decide which bags still need reannotation when
+    `reannotation.force` is off, and to tag reports. Does not need the registry.
+    """
+    with open(config_path, "r") as f:
+        config = yaml.safe_load(f) or {}
+    topics, seen = [], set()
+    for spec in (config.get("launch") or {}).values():
+        spec = spec or {}
+        if not spec.get("force"):
+            continue
+        for topic in spec.get("provides") or []:
+            if topic not in seen:
+                seen.add(topic)
+                topics.append(topic)
+    return topics
+
+
 def remapped_topic(topic, prefix):
     """`topic` moved under `prefix` (e.g. /superodometry/x -> /prereannotation/superodometry/x)."""
     return "{}/{}".format(str(prefix).rstrip("/"), topic.lstrip("/"))
@@ -269,10 +306,11 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
     the untouched original when `rosbag_record.topics` is a list of topics).
 
     `record_only` narrows `rosbag_record.topics` to the topics this bag is actually
-    missing (plus `shared_topics`, which the stack may add to). Without it, playback
-    republishes the copies the bag already has, the recorder picks those up, and the
-    merge leaves two of everything. None = record the whole configured list, which is
-    what `force` wants."""
+    missing (plus `shared_topics` for launches that actually run). It is unioned with
+    the `provides:` of launches that run, so a forced component is recorded even if
+    the caller omitted it. None still means "don't further restrict to missing
+    topics"; recording is always limited to kept-launch provides plus running
+    shared topics, so skipped components pass through the merge as-is."""
     if models_dir is None:
         models_dir = default_models_dir()
     settings = settings or load_reannotation_settings(config_path)
@@ -288,9 +326,12 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
     extra_play_args = spec.get("extra_play_args", [])
     record_drain = settings["record_drain"]
 
-    if record_only is not None and record_topics != "all":
-        keep = set(record_only) | shared_to_record(spec["launches"], launches,
-                                                   settings["shared_topics"])
+    provided = kept_launch_provides(launches)
+    shared = shared_to_record(spec["launches"], launches, settings["shared_topics"])
+    if record_topics != "all":
+        keep = set(provided) | shared
+        if record_only is not None:
+            keep |= set(record_only)
         skipped = [t for t in record_topics if t not in keep]
         record_topics = [t for t in record_topics if t in keep]
         if skipped:
@@ -298,14 +339,14 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
                   "untouched".format(", ".join(record_topics), ", ".join(skipped)),
                   flush=True)
 
-    remapped = {}
-    if settings["force"]:
-        regenerated = regenerated_topics(record_topics, settings["shared_topics"])
-        remapped = {t: remapped_topic(t, settings["remap_prefix"])
-                    for t in present_topics(src_dir, regenerated)}
+    # Remap existing provides of launches that are about to overwrite them, so the
+    # live producer owns the original names. Never remap shared_topics (/tf).
+    shared_set = set(settings["shared_topics"])
+    remapped = {t: remapped_topic(t, settings["remap_prefix"])
+                for t in present_topics(src_dir, [t for t in provided if t not in shared_set])}
     if remapped:
         remap += ["{}:={}".format(old, new) for old, new in sorted(remapped.items())]
-        print("[reannotate] force: replaying existing {} under {}".format(
+        print("[reannotate] replaying existing {} under {}".format(
             ", ".join(sorted(remapped)), settings["remap_prefix"]), flush=True)
         if settings["keep_remapped"] and record_topics != "all":
             record_topics = list(record_topics) + [remapped[t] for t in sorted(remapped)]

@@ -40,8 +40,9 @@ import yaml
 from tartandriver_utils.os_utils import available_cpus, is_kitti_dir, load_yaml
 
 from headless_bag_reannotation import (REANNOTATION_DEFAULTS, present_topics,
-                                       config_regenerated_topics, load_reannotation_settings,
-                                       reannotate_bag, resolve_deploy_path)
+                                       config_forced_launch_topics, config_regenerated_topics,
+                                       load_reannotation_settings, reannotate_bag,
+                                       resolve_deploy_path)
 from bag_message_report import build_report, write_report
 from topic_sync_viz import render_sync_viz
 from recover_truncated_mcap import recover_mcap
@@ -323,19 +324,25 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
 
 
 def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None,
-                                 annotation_topics=None, force=False):
-    """Split `relpaths` into (needs_reannotation, unreadable): {relpath: missing topics}
-    for bags whose raw metadata.yaml
-    is missing any of `annotation_topics` (the reannotate_config's `rosbag_record.topics`
-    minus `reannotation.shared_topics`), and bags whose metadata.yaml couldn't be read at
-    all. With `force` (reannotation.force) or no `annotation_topics` to check against 
-    every readable bag needs reannotation regardless of what it already carries; the
-    metadata is still read, so an unusable bag is caught here rather than mid-playback.
-    Checked via metadata.yaml only (no full-bag download) so phase 1 only stages bags it
-    will actually reannotate -- except for bags in `prestaged`, which the reindex phase
-    already staged in full and whose rebuilt metadata is read straight off disk."""
+                                 annotation_topics=None, force=False,
+                                 forced_launch_topics=()):
+    """Split `relpaths` into (needs_reannotation, unreadable): {relpath: record_only}
+    for bags whose raw metadata.yaml is missing any of `annotation_topics` (the
+    reannotate_config's `rosbag_record.topics` minus `reannotation.shared_topics`),
+    and bags whose metadata.yaml couldn't be read at all.
+
+    With `force` (reannotation.force) or no `annotation_topics` to check against,
+    every readable bag needs reannotation and the value is None (record the whole
+    configured topic list). Per-launch `force` is *not* that path: those bags are
+    still reannotated, but the value is `missing ∪ forced_launch_topics` so
+    un-forced components pass through the merge. The metadata is still read, so an
+    unusable bag is caught here rather than mid-playback. Checked via metadata.yaml
+    only (no full-bag download) so phase 1 only stages bags it will actually
+    reannotate -- except for bags in `prestaged`, which the reindex phase already
+    staged in full and whose rebuilt metadata is read straight off disk."""
     prestaged = prestaged or {}
     annotation_topics = list(annotation_topics or [])
+    forced_launch_topics = list(forced_launch_topics or [])
     force_flag = force  # vs. force implied by there being no topics to test against
     force = force or not annotation_topics
     needed, unreadable = {}, []
@@ -354,14 +361,21 @@ def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged
                 reason = ("reannotation.force=true" if not annotation_topics or force_flag
                           else "no annotation topics to test against")
                 print(f"[reannotate] {relpath or '.'}: {reason} -- reannotating", flush=True)
-                needed[relpath] = None  # force: record the whole configured topic list
+                needed[relpath] = None  # high-level force: record the whole configured list
             else:
-                missing = [t for t in annotation_topics
-                           if t not in present_topics(bag_dir, annotation_topics)]
-                if missing:
-                    print(f"[reannotate] {relpath or '.'}: missing {', '.join(missing)} "
+                present = present_topics(bag_dir, annotation_topics)
+                missing = [t for t in annotation_topics if t not in present]
+                extra = [t for t in forced_launch_topics if t not in missing]
+                record_only = missing + extra
+                if missing or forced_launch_topics:
+                    bits = []
+                    if missing:
+                        bits.append("missing " + ", ".join(missing))
+                    if forced_launch_topics:
+                        bits.append("launch.force regenerating " + ", ".join(forced_launch_topics))
+                    print(f"[reannotate] {relpath or '.'}: {'; '.join(bits)} "
                           f"-- reannotating", flush=True)
-                    needed[relpath] = missing
+                    needed[relpath] = record_only
                 else:
                     print(f"[reannotate] {relpath or '.'}: has all "
                           f"{len(annotation_topics)} annotation topic(s) -- skipping", flush=True)
@@ -624,6 +638,7 @@ def run_root(paths, opt, stager, dst_stager, data_dir):
     reannotate_settings = opt.reannotate_settings
     annotation_topics = opt.annotation_topics
     forced_topics = opt.forced_topics
+    forced_launch_topics = opt.forced_launch_topics
     recover_truncated_mcap = opt.recover_truncated_mcap
     pack_hdf5 = opt.pack_hdf5
     keep_kitti_local = opt.keep_kitti_local
@@ -723,7 +738,8 @@ def run_root(paths, opt, stager, dst_stager, data_dir):
             needs_reannotation, unreadable = classify_reannotation_needed(
                 remaining, paths.root_dir, stager, data_dir, prestaged,
                 annotation_topics=annotation_topics,
-                force=reannotate_settings["force"])
+                force=reannotate_settings["force"],
+                forced_launch_topics=forced_launch_topics)
             for relpath, err in unreadable:
                 failed.append(relpath)
                 summary.append({
@@ -999,20 +1015,29 @@ def main():
               f"{converter_workers} each ({converter_workers * num_conversion_workers} total)")
 
     reannotate_config, reannotate_settings = "", dict(REANNOTATION_DEFAULTS)
-    annotation_topics, forced_topics = [], []
+    annotation_topics, forced_topics, forced_launch_topics = [], [], []
     if reannotate:
         assert reannotate_config_arg, "pipeline.reannotate_config is required when pipeline.reannotate is true"
         reannotate_config = resolve_deploy_path(reannotate_config_arg)
         reannotate_settings = load_reannotation_settings(reannotate_config)
         annotation_topics = config_regenerated_topics(reannotate_config, reannotate_settings)
+        forced_launch_topics = config_forced_launch_topics(reannotate_config)
         # tags the reports: which topics a bag that already had them got regenerated over
-        forced_topics = annotation_topics if reannotate_settings["force"] else []
+        forced_topics = (annotation_topics if reannotate_settings["force"]
+                         else forced_launch_topics)
         if reannotate_settings["force"]:
             print(f"[reannotate] enabled (config={reannotate_config}), force=true -- every "
                   f"pending bag is reannotated, {num_reannotation_workers} at a time; bags "
                   f"that already have {annotation_topics} keep those copies under "
                   f"{reannotate_settings['remap_prefix']} and get fresh ones on the "
                   f"original names")
+        elif forced_launch_topics:
+            print(f"[reannotate] enabled (config={reannotate_config}), launch.force on "
+                  f"{forced_launch_topics} -- every pending bag is reannotated, "
+                  f"{num_reannotation_workers} at a time; those topics are regenerated even "
+                  f"when already present (old copies kept under "
+                  f"{reannotate_settings['remap_prefix']}); other components still skip "
+                  f"when the bag already has them")
         elif annotation_topics:
             print(f"[reannotate] enabled (config={reannotate_config}) -- bags missing any of "
                   f"{annotation_topics} (rosbag_record.topics minus "
@@ -1041,6 +1066,7 @@ def main():
         reannotate_settings=reannotate_settings,
         annotation_topics=annotation_topics,
         forced_topics=forced_topics,
+        forced_launch_topics=forced_launch_topics,
         recover_truncated_mcap=bool(pcfg.get("recover_truncated_mcap", True)),
         pack_hdf5=pack_hdf5,
         keep_kitti_local=bool(pcfg.get("keep_kitti_local", True)),

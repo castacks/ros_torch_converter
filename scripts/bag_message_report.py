@@ -35,9 +35,10 @@ def build_report(original_dir, new_dir=None, kitti_dir=None,
     forced-regeneration topic, where the two counts come from different sources.
 
     `forced_topics` (with `remap_prefix`) are the topics the stack regenerates when
-    `reannotation.force` is on: those the original bag already had are tagged
-    FORCED_TAG, and the copies kept under `remap_prefix` are tagged as such, so the
-    table says outright which counts are the fresh run and which are the old data.
+    `reannotation.force` or a per-launch `force` is on: those the original bag already
+    had are tagged FORCED_TAG, and the copies kept under `remap_prefix` are tagged as
+    such, so the table says outright which counts are the fresh run and which are
+    the old data.
     """
     orig_topics = bag_topics(original_dir)
     new_topics = bag_topics(new_dir) if new_dir else {}
