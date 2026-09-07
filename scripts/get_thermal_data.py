@@ -126,9 +126,21 @@ if __name__ == '__main__':
     
     left_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['left_dir'], '*.png')))
     right_imgs = sorted(glob.glob(os.path.join(args.dataset, "sensors",config['right_dir'], '*.png')))
-    
+
+    left_by_name = {os.path.basename(p): p for p in left_imgs}
+    right_by_name = {os.path.basename(p): p for p in right_imgs}
+    unpaired_left = sorted(set(left_by_name) - set(right_by_name))
+    unpaired_right = sorted(set(right_by_name) - set(left_by_name))
+    common_names = sorted(set(left_by_name) & set(right_by_name))
+
     print(f"Found {len(left_imgs)} left images and {len(right_imgs)} right images")
-    assert len(left_imgs) == len(right_imgs), "Left and right image directories must have the same number of images"
+    print(f"Paired frames: {len(common_names)}")
+    if unpaired_left:
+        print(f"Unpaired left frames ({len(unpaired_left)}): {unpaired_left}")
+    if unpaired_right:
+        print(f"Unpaired right frames ({len(unpaired_right)}): {unpaired_right}")
+    if not common_names:
+        raise SystemExit("No matching left/right thermal frames to process")
 
     left_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['left_dir']}_{output_suffix}")
     right_out_dir = os.path.join(args.dataset, SENSORS_GROUP, f"{config['right_dir']}_{output_suffix}")
@@ -149,17 +161,16 @@ if __name__ == '__main__':
     shutil.copy(right_timestamps, os.path.join(right_out_dir, 'timestamps.txt'))
     shutil.copy(right_info, os.path.join(right_out_dir, 'info.yaml'))
 
-    for idx, (left_img_path, right_img_path) in enumerate(tqdm(zip(left_imgs, right_imgs), total=len(left_imgs))):
-        left_filename = os.path.basename(left_img_path)
-        right_filename = os.path.basename(right_img_path)
-        
-        assert left_filename == right_filename, f"Image names don't match: {left_filename} vs {right_filename}"
-        
+    for filename in tqdm(common_names):
+        left_img_path = left_by_name[filename]
+        right_img_path = right_by_name[filename]
+        idx = int(os.path.splitext(filename)[0])
+
         left_img = cv2.imread(left_img_path, cv2.IMREAD_UNCHANGED)
         right_img = cv2.imread(right_img_path, cv2.IMREAD_UNCHANGED)
-        
+
         if left_img is None or right_img is None:
-            print(f"Warning: Could not load images {left_filename}")
+            print(f"Warning: Could not load images {filename}")
             continue
         
         # placeholders in case config doesn't require rectify
@@ -180,8 +191,8 @@ if __name__ == '__main__':
             left_img = enhance_image(left_img)
             right_img = enhance_image(right_img)
         
-        left_out_path = os.path.join(left_out_dir, left_filename)
-        right_out_path = os.path.join(right_out_dir, right_filename)
+        left_out_path = os.path.join(left_out_dir, filename)
+        right_out_path = os.path.join(right_out_dir, filename)
         
         cv2.imwrite(left_out_path, left_img)
         cv2.imwrite(right_out_path, right_img)
@@ -197,7 +208,7 @@ if __name__ == '__main__':
                                                         calib_dict['distort_model_right'], right_w, right_h, device='cpu')
         right_cam_info.to_kitti(right_camera_info_out_dir, idx)
 
-    print(f'Done processing {len(left_imgs)} stereo thermal image pairs')
+    print(f'Done processing {len(common_names)} stereo thermal image pairs')
     print(f'Output saved to:')
     print(f'  Left: {left_out_dir}')
     print(f'  Right: {right_out_dir}')

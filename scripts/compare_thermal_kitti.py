@@ -31,7 +31,13 @@ def png_names(directory):
     return sorted(n for n in os.listdir(directory) if n.endswith('.png'))
 
 
-def compare_side(ros_dir, script_dir):
+def stereo_paired_names(left_dir, right_dir):
+    left = set(png_names(left_dir))
+    right = set(png_names(right_dir))
+    return sorted(left & right), sorted(left - right), sorted(right - left)
+
+
+def compare_side(ros_dir, script_dir, compare_names):
     ros_names = png_names(ros_dir)
     script_names = set(png_names(script_dir))
     missing_script = [n for n in ros_names if n not in script_names]
@@ -44,9 +50,7 @@ def compare_side(ros_dir, script_dir):
     worst_max = -1
     n_compared = 0
 
-    for name in ros_names:
-        if name not in script_names:
-            continue
+    for name in compare_names:
         ros = cv2.imread(os.path.join(ros_dir, name), cv2.IMREAD_UNCHANGED)
         scr = cv2.imread(os.path.join(script_dir, name), cv2.IMREAD_UNCHANGED)
         if ros is None or scr is None:
@@ -80,13 +84,6 @@ def compare_side(ros_dir, script_dir):
         'extra_script': extra_script,
     }
 
-
-def print_opencv_flags():
-    print(f"[thermal_verify] cv2={cv2.__version__} file={cv2.__file__}")
-    print(f"[thermal_verify] ocl.have={cv2.ocl.haveOpenCL()} ocl.use={cv2.ocl.useOpenCL()}")
-    print(f"[thermal_verify] build information: {cv2.getBuildInformation()}")
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--kitti_dir', type=str, required=True,
@@ -100,22 +97,43 @@ def main():
                         help='report path (default: <kitti_dir>/thermal_verify_report.json)')
     args = parser.parse_args()
 
-    print_opencv_flags()
-
     group_dir = os.path.join(args.kitti_dir, args.group)
+    ros_left_dir = os.path.join(group_dir, args.ros_left)
+    ros_right_dir = os.path.join(group_dir, args.ros_right)
+    script_left_dir = os.path.join(group_dir, args.script_left)
+    script_right_dir = os.path.join(group_dir, args.script_right)
+
+    ros_paired, ros_unpaired_left, ros_unpaired_right = stereo_paired_names(
+        ros_left_dir, ros_right_dir)
+    script_paired, script_unpaired_left, script_unpaired_right = stereo_paired_names(
+        script_left_dir, script_right_dir)
+    compare_names = sorted(set(ros_paired) & set(script_paired))
+
     report = {
         'kitti_dir': args.kitti_dir,
-        'left': compare_side(
-            os.path.join(group_dir, args.ros_left),
-            os.path.join(group_dir, args.script_left),
-        ),
-        'right': compare_side(
-            os.path.join(group_dir, args.ros_right),
-            os.path.join(group_dir, args.script_right),
-        ),
+        'stereo': {
+            'n_ros_paired': len(ros_paired),
+            'n_script_paired': len(script_paired),
+            'n_compared': len(compare_names),
+            'ros_unpaired_left': ros_unpaired_left,
+            'ros_unpaired_right': ros_unpaired_right,
+            'script_unpaired_left': script_unpaired_left,
+            'script_unpaired_right': script_unpaired_right,
+        },
+        'left': compare_side(ros_left_dir, script_left_dir, compare_names),
+        'right': compare_side(ros_right_dir, script_right_dir, compare_names),
     }
 
     left, right = report['left'], report['right']
+    stereo = report['stereo']
+    print(f"[thermal_verify] stereo ros_paired={stereo['n_ros_paired']} "
+          f"script_paired={stereo['n_script_paired']} compared={stereo['n_compared']}")
+    if stereo['ros_unpaired_left'] or stereo['ros_unpaired_right']:
+        print(f"[thermal_verify] unpaired ROS left={len(stereo['ros_unpaired_left'])} "
+              f"right={len(stereo['ros_unpaired_right'])}")
+    if stereo['script_unpaired_left'] or stereo['script_unpaired_right']:
+        print(f"[thermal_verify] unpaired script left={len(stereo['script_unpaired_left'])} "
+              f"right={len(stereo['script_unpaired_right'])}")
     print(f"[thermal_verify] left max={left['max_abs']} n={left['n_diff_pixels']} "
           f"frames={left['n_compared']} | right max={right['max_abs']} "
           f"n={right['n_diff_pixels']} frames={right['n_compared']}")
