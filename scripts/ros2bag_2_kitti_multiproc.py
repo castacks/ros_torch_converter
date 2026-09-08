@@ -55,6 +55,15 @@ def group_color(group):
 def apply_color(color, text):
     return f"{color}{text}{RESET}" if color else text
 
+def message_time(msg, timestamp, use_bag_time=False):
+    """Prefer a nonzero header stamp; otherwise use this message's bag time."""
+    if hasattr(msg, "header") and not use_bag_time:
+        stamp = stamp_to_time(msg.header.stamp)
+        if stamp != 0:
+            return stamp
+    return timestamp * 1e-9
+
+
 def setup_queue(reader, topics, dt):
     """
     Initialize message queues based on config
@@ -262,11 +271,7 @@ def process_cvt_entry_wrapper(args_tuple):
                 except Exception:
                     continue
 
-                msg_time = timestamp * 1e-9
-                if hasattr(msg, "header") and not parsed_args.use_bag_time:
-                    stamp_time = stamp_to_time(msg.header.stamp)
-                    if stamp_time != 0:
-                        msg_time = stamp_time
+                msg_time = message_time(msg, timestamp, parsed_args.use_bag_time)
 
                 # Collect all messages for INTERP topics
                 if is_interp:
@@ -428,12 +433,7 @@ if __name__ == '__main__':
             msg = reader.deserialize(rawdata, connection.msgtype)
             topic = connection.topic
 
-            if hasattr(msg, "header") and not args.use_bag_time:
-                stamp_time = stamp_to_time(msg.header.stamp)
-                if stamp_time != 0:
-                    msg_time = stamp_time
-            else:
-                msg_time = timestamp * 1e-9
+            msg_time = message_time(msg, timestamp, args.use_bag_time)
 
             # first-seen frame wins per topic
             if topic not in topic_frame:

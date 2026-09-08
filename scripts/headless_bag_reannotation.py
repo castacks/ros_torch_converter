@@ -94,7 +94,10 @@ def build_stack_from_config(config_path, registry_path, models_dir="", use_sim_t
     for key, spec in (config.get("launch") or {}).items():
         assert key in registry.get("launch", {}), \
             "launch '{}' in {} not found in registry {}".format(key, config_path, registry_path)
-        cmd = registry["launch"][key]["launch_cmd"].split()
+        if spec.get("launch_file"):
+            cmd = ["ros2", "launch", resolve_deploy_path(spec["launch_file"])]
+        else:
+            cmd = registry["launch"][key]["launch_cmd"].split()
         for k, v in (spec.get("launch_args") or {}).items():
             cmd.append(launch_arg(k, v))
         # `provides:` lets reannotate_bag skip a component whose output the bag already
@@ -297,6 +300,19 @@ def _wait_group(proc, grace):
         proc.wait()
 
 
+def topics_to_record(configured, launches, shared, counts, force=False, record_only=None):
+    """Record whole output groups of active components (e.g. SO), plus their TF.
+
+    needed_launches has already removed complete, unforced components. A partial
+    component regenerates its entire provides set, preserving consistency between
+    SO odometry and point clouds. Other complete components remain untouched.
+    """
+    if configured == "all":
+        return "all"
+    eligible = set(kept_launch_provides(launches)) | set(shared) | set(record_only or [])
+    return [topic for topic in configured if topic in eligible]
+
+
 def reannotate_bag(src_dir, out_dir, domain_id=None,
                    config_path=DEFAULT_CONFIG, registry_path=DEFAULT_REGISTRY,
                    models_dir=None, use_sim_time=True, settle=8.0,
@@ -328,22 +344,20 @@ def reannotate_bag(src_dir, out_dir, domain_id=None,
 
     provided = kept_launch_provides(launches)
     shared = shared_to_record(spec["launches"], launches, settings["shared_topics"])
+    selected = topics_to_record(record_topics, launches, shared, bag_topics(src_dir),
+                                settings["force"], record_only)
     if record_topics != "all":
-        keep = set(provided) | shared
-        if record_only is not None:
-            keep |= set(record_only)
-        skipped = [t for t in record_topics if t not in keep]
-        record_topics = [t for t in record_topics if t in keep]
+        skipped = [topic for topic in record_topics if topic not in selected]
         if skipped:
-            print("[reannotate] recording only {} -- the bag already has {}, left "
-                  "untouched".format(", ".join(record_topics), ", ".join(skipped)),
-                  flush=True)
+            print(f"[reannotate] existing topics retained without recording: {skipped}", flush=True)
+    record_topics = selected
 
     # Remap existing provides of launches that are about to overwrite them, so the
     # live producer owns the original names. Never remap shared_topics (/tf).
     shared_set = set(settings["shared_topics"])
     remapped = {t: remapped_topic(t, settings["remap_prefix"])
-                for t in present_topics(src_dir, [t for t in provided if t not in shared_set])}
+                for t in present_topics(src_dir, [t for t in provided if t not in shared_set
+                    and (record_topics == "all" or t in record_topics)])}
     if remapped:
         remap += ["{}:={}".format(old, new) for old, new in sorted(remapped.items())]
         print("[reannotate] replaying existing {} under {}".format(

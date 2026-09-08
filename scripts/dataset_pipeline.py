@@ -319,8 +319,16 @@ def filter_unconverted(run_dirs, dst_dir, stager=None, data_dir=None):
     if stager:
         return [relpath for relpath in run_dirs
                 if not stager.exists(os.path.join(dst_dir, dataset_relpath(relpath)))]
-    return [relpath for relpath in run_dirs
-            if not is_kitti_dir(os.path.join(data_dir, dst_dir, dataset_relpath(relpath)))]
+    def complete(relpath):
+        directory = os.path.join(data_dir, dst_dir, dataset_relpath(relpath))
+        try:
+            with open(os.path.join(directory, "conversion_stats.json")) as stream:
+                stats = json.load(stream)
+            return (is_kitti_dir(directory) and stats.get("kept_frames", 0) > 0
+                    and os.path.isfile(os.path.join(directory, "dataset_report.md")))
+        except (OSError, ValueError):
+            return False
+    return [relpath for relpath in run_dirs if not complete(relpath)]
 
 
 def classify_reannotation_needed(relpaths, root_dir, stager, data_dir, prestaged=None,
@@ -421,6 +429,27 @@ def reannotate_one(relpath, root_dir, kitti_out_root, orig_scratch_root, merged_
 
         out_dir = os.path.join(kitti_out_root, dataset_relpath(relpath))
         os.makedirs(out_dir, exist_ok=True)
+        if reannotate_settings.get("minimum_thermal_retention") is not None:
+            from audit_reannotation import audit
+            from headless_bag_reannotation import (build_stack_from_config, needed_launches,
+                kept_launch_provides, shared_to_record, topics_to_record, bag_topics, DEFAULT_REGISTRY)
+            spec = build_stack_from_config(reannotate_config, DEFAULT_REGISTRY)
+            active = needed_launches(spec["launches"], orig_dir, reannotate_settings["force"])
+            shared = shared_to_record(spec["launches"], active, reannotate_settings["shared_topics"])
+            recorded = topics_to_record(spec["record_topics"], active, shared,
+                bag_topics(orig_dir), reannotate_settings["force"], record_only)
+            remapped = [topic for topic in kept_launch_provides(active) if topic in recorded]
+            result = audit(orig_dir, merged_dir,
+                minimum_fraction=float(reannotate_settings["minimum_thermal_retention"]),
+                remap_prefix=reannotate_settings["remap_prefix"],
+                forced_topics=remapped, excluded_topics=set(shared) & set(recorded),
+                keep_remapped=reannotate_settings["keep_remapped"])
+            audit_path = os.path.join(out_dir, "recording_audit.json")
+            with open(audit_path, "w") as stream:
+                json.dump(result, stream, indent=2)
+            if not result["thermal"] or not result["passed"]:
+                raise RuntimeError(f"Recording retention audit failed; see {audit_path}")
+            print(f"[reannotate] {relpath}: thermal recording retention audit passed", flush=True)
         print(f"[reannotate] {relpath}: writing message-count report + sync viz ...", flush=True)
         report_rows = build_report(orig_dir, merged_dir, forced_topics=forced_topics,
                                    remap_prefix=reannotate_settings["remap_prefix"])
@@ -551,7 +580,8 @@ def convert_one(relpath, root_dir, dst_dir, convert_config, converter_extra_args
         else:
             local_dst = os.path.join(data_dir, dst_relpath)
             print(f"[convert] {relpath}: copying result to {local_dst} ...", flush=True)
-            shutil.copytree(primary_src, local_dst, dirs_exist_ok=True)
+            if os.path.realpath(primary_src) != os.path.realpath(local_dst):
+                shutil.copytree(primary_src, local_dst, dirs_exist_ok=True)
 
         if extra_dst_dir:
             extra_relpath = os.path.join(extra_dst_dir, dataset_relpath(relpath))
@@ -619,6 +649,26 @@ def pick(cli_value, cfg_value, name):
     return cli_value
 
 
+def select_run_dirs(discovered, requested):
+    """Select explicit runs (or parent directories) while preserving one worker pool."""
+    if not requested:
+        return discovered
+    prefixes = []
+    for value in requested:
+        if os.path.isabs(value) or ".." in value.split("/"):
+            raise ValueError(f"run dirs must be relative to --root_dir: {value!r}")
+        prefixes.append(os.path.normpath(value).rstrip("/"))
+    selected = [run for run in discovered
+                if any(prefix == "." or run == prefix or run.startswith(prefix + "/")
+                       for prefix in prefixes)]
+    missing = [prefix for prefix in prefixes
+               if not any(prefix == "." or run == prefix or run.startswith(prefix + "/")
+                          for run in selected)]
+    if missing:
+        raise ValueError(f"No bags found for selected run dirs: {missing}")
+    return selected
+
+
 def run_root(paths, opt, stager, dst_stager, data_dir):
     """Discover, reannotate and convert everything under one root.
 
@@ -647,6 +697,8 @@ def run_root(paths, opt, stager, dst_stager, data_dir):
     print(f"[discovery] scanning {scan_location} (exclude_subdirs={sorted(exclude_subdirs)})")
     run_dirs, needs_reindex = find_rosbag_run_dirs(
         paths.root_dir, exclude_subdirs, stager=stager, data_dir=data_dir)
+    run_dirs = select_run_dirs(run_dirs, getattr(opt, "selected_run_dirs", None))
+    needs_reindex.intersection_update(run_dirs)
     print(f"[discovery] found {len(run_dirs)} rosbag run-dir(s)")
 
     pending = filter_unconverted(run_dirs, paths.dst_dir, stager=dst_stager, data_dir=data_dir)
@@ -880,6 +932,8 @@ def main():
                              "re-rooted to match, so results land at <dst_dir>/<RUN_DIR>/... "
                              "however deep the RUN_DIR points; one ending in 'rosbags' drops "
                              "that segment. Default: everything under --root_dir.")
+    parser.add_argument("--batch_run_dirs", action="store_true",
+                        help="schedule all explicit RUN_DIRs in a shared batch/worker pool")
     parser.add_argument("--root_dir", default=env_str("ROOT_DIR"),
                         help="root to scan for run-dirs. A plain path with --local, else "
                              "rclone-remote-relative. Env: ROOT_DIR")
@@ -1052,6 +1106,7 @@ def main():
                   f"{reannotate_settings['reannotated_dir']}")
 
     opt = argparse.Namespace(
+        selected_run_dirs=args.run_dirs if args.batch_run_dirs else None,
         convert_config=args.convert_config,
         converter_extra_args=converter_extra_args,
         exclude_subdirs=exclude_subdirs,
@@ -1074,7 +1129,7 @@ def main():
 
     stop_memory_logger = start_memory_logger(args.data_dir or tempfile.gettempdir())
 
-    run_dirs = args.run_dirs or [""]
+    run_dirs = [""] if args.batch_run_dirs else (args.run_dirs or [""])
     if args.run_dirs:
         print(f"[config] {len(run_dirs)} run dir(s) under {args.root_dir}: {' '.join(run_dirs)}")
     totals = {"found": 0, "pending": 0, "converted": 0}
