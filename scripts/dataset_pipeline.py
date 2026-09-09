@@ -45,7 +45,7 @@ from headless_bag_reannotation import (REANNOTATION_DEFAULTS, present_topics,
                                        resolve_deploy_path)
 from bag_message_report import build_report, write_report
 from topic_sync_viz import render_sync_viz
-from recover_truncated_mcap import recover_mcap
+from recover_truncated_mcap import mcap_has_trailing_magic, recover_mcap
 
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -216,13 +216,34 @@ def reindex_bag(bag_dir, relpath="", recover_truncated=True):
     return recovery_actions
 
 
+def bag_storage_is_valid(bag_dir):
+    """True iff every non-empty .mcap in bag_dir has its closing magic footer.
+
+    A recorder killed hard mid-write can leave metadata.yaml intact -- it's
+    small and typically finalized separately -- while the much larger .mcap
+    data file never gets its closing footer written. So this is a distinct
+    check from bag_metadata_is_valid, not a stand-in for it: a bag can have
+    perfectly valid metadata.yaml and still hold a truncated .mcap that will
+    fail with "File end magic is invalid" the moment something reads it."""
+    for name in os.listdir(bag_dir):
+        if os.path.splitext(name)[1] != ".mcap":
+            continue
+        path = os.path.join(bag_dir, name)
+        if os.path.getsize(path) == 0:
+            continue  # reindex_bag/recover_mcap already drop/skip empty files
+        if not mcap_has_trailing_magic(path):
+            return False
+    return True
+
+
 def repair_bag_metadata(bag_dir, relpath="", recover_truncated=True):
-    """Make a staged bag readable: rebuild metadata.yaml if it's missing or empty, then
-    backfill an empty storage_identifier. Raises if the bag can't be repaired. Idempotent,
-    so it's safe to call again on an already-repaired dir. Returns the truncated-mcap
-    recovery actions (empty unless a reindex happened and recovered something)."""
+    """Make a staged bag readable: rebuild metadata.yaml if it's missing or empty, or
+    recover any truncated .mcap even when metadata.yaml is otherwise fine, then backfill
+    an empty storage_identifier. Raises if the bag can't be repaired. Idempotent, so it's
+    safe to call again on an already-repaired dir. Returns the truncated-mcap recovery
+    actions (empty unless a reindex happened and recovered something)."""
     recovery_actions = []
-    if not bag_metadata_is_valid(bag_dir):
+    if not bag_metadata_is_valid(bag_dir) or not bag_storage_is_valid(bag_dir):
         recovery_actions = reindex_bag(bag_dir, relpath, recover_truncated=recover_truncated)
     repair_bag_storage_identifier(bag_dir, relpath)
     return recovery_actions
