@@ -40,3 +40,22 @@
   max_age: 1.
   optional: true
   args: {}
+
+- name: odometry
+  group: rtk_odometry_spoof
+  topic: /rtk_odometry_spoof/odometry
+  type: OdomRBState
+  max_age: 1.
+  optional: true
+  args:
+    interpolation:
+      type: MATCH_TOPIC
+      topic: super_odometry/odometry
+
+- name: pointcloud_in_odom
+  group: rtk_odometry_spoof
+  topic: /rtk_odometry_spoof/velodyne_cloud_registered
+  type: PointCloud
+  max_age: 1.
+  optional: true
+  args: {}
