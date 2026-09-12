@@ -50,6 +50,7 @@
         topic: /thermal_left/camera_info
         type: Intrinsics
         max_age: 1.
+        optional: true
         args: {}
 
       - name: thermal_left_camera_info
@@ -57,6 +58,7 @@
         topic: /thermal_left/camera_info
         type: CameraInfo
         max_age: 1.
+        optional: true
         args: {}
 
       - name: thermal_left_processed_intrinsics
@@ -78,6 +80,7 @@
         topic: /thermal_right/camera_info
         type: Intrinsics
         max_age: 1.
+        optional: true
         args: {}
 
       - name: thermal_right_camera_info
@@ -85,6 +88,7 @@
         topic: /thermal_right/camera_info
         type: CameraInfo
         max_age: 1.
+        optional: true
         args: {}
 
       - name: thermal_right_processed_intrinsics
