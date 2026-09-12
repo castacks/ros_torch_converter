@@ -543,6 +543,7 @@ def convert_one(relpath, root_dir, dst_dir, convert_config, converter_extra_args
             "--config", resolve_config_path(convert_config),
             "--src_dir", src_dir,
             "--dst_dir", out_dir,
+            "--fill_missing_stamps",
             "--force",
         ]
         if not render_video:
