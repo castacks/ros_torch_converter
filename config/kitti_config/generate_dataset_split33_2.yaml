@@ -1,0 +1,253 @@
+---
+  dt: 0.1
+
+  #allow interpolation up to this many seconds
+  interp_tol: 0.5
+
+  #set to true to allow past target times to be filled by future data
+  backward_interpolation: false
+
+  #overrride tfs with values from config (STRONGLY RECOMMEND USING)
+  calibration: !include $TARTANDRIVER_HOME/src/core/static_tf_publisher/config/offroad/yamaha.yaml
+
+  topics: !listcat
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/autonomy_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/gq7_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/racepak_topics.yaml
+    - !include $TARTANDRIVER_HOME/src/core/ros_torch_converter/config/topics/yamaha/additional_topics_dataset_gen.yaml
+    # thermal required (optional omitted)
+    -
+      - name: thermal_left
+        group: sensors
+        topic: /thermal_left/image
+        type: Thermal16bitImage
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right
+        group: sensors
+        topic: /thermal_right/image
+        type: Thermal16bitImage
+        max_age: 1.
+        args: {}
+
+      - name: thermal_left_processed
+        group: sensors
+        topic: /thermal_left/image_processed
+        type: ThermalImage
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right_processed
+        group: sensors
+        topic: /thermal_right/image_processed
+        type: ThermalImage
+        max_age: 1.
+        args: {}
+
+      - name: thermal_left_intrinsics
+        group: sensors
+        topic: /thermal_left/camera_info
+        type: Intrinsics
+        max_age: 1.
+        args: {}
+
+      - name: thermal_left_camera_info
+        group: sensors
+        topic: /thermal_left/camera_info
+        type: CameraInfo
+        max_age: 1.
+        args: {}
+
+      - name: thermal_left_processed_intrinsics
+        group: sensors
+        topic: /thermal_left/image_processed/camera_info
+        type: Intrinsics
+        max_age: 1.
+        args: {}
+
+      - name: thermal_left_processed_camera_info
+        group: sensors
+        topic: /thermal_left/image_processed/camera_info
+        type: CameraInfo
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right_intrinsics
+        group: sensors
+        topic: /thermal_right/camera_info
+        type: Intrinsics
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right_camera_info
+        group: sensors
+        topic: /thermal_right/camera_info
+        type: CameraInfo
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right_processed_intrinsics
+        group: sensors
+        topic: /thermal_right/image_processed/camera_info
+        type: Intrinsics
+        max_age: 1.
+        args: {}
+
+      - name: thermal_right_processed_camera_info
+        group: sensors
+        topic: /thermal_right/image_processed/camera_info
+        type: CameraInfo
+        max_age: 1.
+        args: {}
+    # remaining sensor/control topics optional
+    -
+      - name: multisense_left_rect_color_intrinsics
+        group: sensors
+        topic: /multisense/left/image_rect_color/camera_info
+        type: Intrinsics
+        max_age: 1.
+        optional: true
+        args: {}
+
+      - name: multisense_left_rect_color
+        group: sensors
+        topic: /multisense/left/image_rect_color
+        type: Image
+        max_age: 1.
+        parallel_workers: 4
+        optional: true
+        args: {}
+
+      - name: multisense_left_rect_color_camera_info
+        group: sensors
+        topic: /multisense/left/image_rect_color/camera_info
+        type: CameraInfo
+        max_age: 1.
+        optional: true
+        args: {}
+
+      - name: velodyne_1
+        group: sensors
+        topic: /velodyne_1/velodyne_points
+        type: PointCloudWithTime
+        max_age: 1.
+        parallel_workers: 1
+        optional: true
+        args: {}
+
+      - name: velodyne_2
+        group: sensors
+        topic: /velodyne_2/velodyne_points
+        type: PointCloudWithTime
+        max_age: 1.
+        parallel_workers: 1
+        optional: true
+        args: {}
+
+      - name: novatel_gps_odom
+        group: sensors
+        topic: /odometry/filtered_odom
+        type: OdomRBState
+        max_age: 1.
+        optional: true
+        args: {}
+
+      - name: novatel_imu
+        group: sensors
+        topic: /novatel/imu/data
+        type: Imu
+        max_age: 1.
+        optional: true
+        args: {}
+
+      - name: steer_angle
+        group: controls
+        topic: /talon/current_position
+        type: Float32
+        max_age: 1.
+        optional: true
+        args:
+          interpolation:
+            type: MATCH_TOPIC #UNCHANGED/MATCH_TOPIC/MATCH_TARGET
+            topic: super_odometry/odometry
+
+      - name: target_steer_angle
+        group: controls
+        topic: /talon/steering_angle
+        type: Float32
+        max_age: 1.
+        optional: true
+        args:
+          interpolation:
+            type: MATCH_TOPIC
+            topic: super_odometry/odometry
+
+      - name: command
+        group: controls
+        topic: /mux/cmd
+        type: Command
+        max_age: 1.
+        optional: true
+        args:
+          interpolation:
+            type: MATCH_TOPIC
+            topic: super_odometry/odometry
+
+      - name: teleop_command
+        group: controls
+        topic: /teleop_cmd
+        type: Command
+        optional: true
+        max_age: 1.
+        args:
+          interpolation:
+            type: MATCH_TOPIC
+            topic: super_odometry/odometry
+
+      - name: auto_command
+        group: controls
+        topic: /auto_cmd
+        type: Command
+        optional: true
+        max_age: 1.
+        args:
+          interpolation:
+            type: MATCH_TOPIC
+            topic: super_odometry/odometry
+
+      - name: odometry
+        group: super_odometry
+        topic: /superodometry/integrated_to_init #namespaced in new bags
+        type: OdomRBState
+        max_age: 1.
+        optional: true
+        args:
+          interpolation:
+            type: UNCHANGED
+
+      - name: pointcloud_in_odom
+        group: super_odometry
+        topic: /superodometry/velodyne_cloud_registered #make sure this is in sensor_init and not sensor_init_rot
+        type: PointCloud
+        max_age: 1.
+        optional: true
+        args: {}
+
+  pipeline:
+    num_conversion_workers: 2
+    max_total_converter_workers: 4
+    exclude_subdirs: ''        # comma-separated dir names (any depth) and/or root-relative
+                               # paths (with a '/') to skip; '' / 'none' keeps all
+    converter_extra_args: ''
+    render_video: true
+    video_config: config/video/thermal_pip.yaml
+    # Reannotate bags missing super_odometry before converting; needs gpu >= 1 cause of roughness!
+    reannotate: true
+    reannotate_config: tartandriver_deploy/configs/playback/postprocess_super_odometry.yaml
+    num_reannotation_workers: 1
+    phase_batch_size: 6 #0/unset = one batch of everything pending.
+
+    pack_hdf5: true
+    keep_kitti_local: false     # drop the per-bag KITTI tree once both copies land
+    recover_truncated_mcap: true  # rebuild a truncated final .mcap before reindex
