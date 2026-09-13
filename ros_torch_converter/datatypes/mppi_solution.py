@@ -22,6 +22,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         super().__init__()
         self.stamp = None
         self.frame_id = None
+        self.model_name = None
         self.state_dim = None
         self.state_keys = None
         self.control_dim = None
@@ -55,6 +56,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
             solution_states,
             solution_controls,
             k=0,
+            model_name=None,
             random_states=None,
             random_controls=None,
         ):
@@ -93,6 +95,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
         soln = MPPISolutionTorch(device=device)
 
+        soln.model_name = model_name
         soln.state_dim = state_dim
         soln.state_keys = state_keys
         soln.control_dim = control_dim
@@ -124,6 +127,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         soln.frame_id = msg.header.frame_id
 
         # as is
+        soln.model_name = msg.model_name
         soln.state_dim = msg.state_dim
         soln.state_keys = msg.state_keys
         soln.control_dim = msg.control_dim
@@ -149,6 +153,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
 
+        msg.model_name = self.model_name
         msg.state_dim = self.state_dim
         msg.state_keys = self.state_keys
         msg.control_dim = self.control_dim
@@ -253,6 +258,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         update_info_file(base_dir, 'frame_id', self.frame_id)
 
         data = {
+            'model_name': self.model_name,
             'state_dim': self.state_dim,
             'state_keys': self.state_keys,
             'control_dim': self.control_dim,
@@ -310,6 +316,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         term_feas = torch.randint(0,2,size=(nterms,), device=device).bool()
 
         data = {
+            'model_name': 'general_kenobi',
             'state_dim': n,
             'state_keys': ["".join(random.sample(string.ascii_letters, 5)) for _ in range(n)],
             'control_dim': m,
@@ -336,6 +343,8 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
     def __eq__(self, other):
         if self.frame_id != other.frame_id:
+            return False
+        if self.model_name != other.model_name:
             return False
 
         if abs(self.stamp - other.stamp) > 1e-8:
@@ -387,7 +396,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
     def __repr__(self):
         return (
-            "MPPISolutionTorch with stamp={:.2f} frame_id={} soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
-                self.stamp, self.frame_id, self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
-            )
+            "MPPISolutionTorch with stamp={:.2f} frame_id={} model_name={}, soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
+                self.stamp, self.frame_id, self.model_name, self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
+             )
         )
