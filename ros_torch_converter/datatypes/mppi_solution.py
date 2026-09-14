@@ -127,7 +127,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         soln.frame_id = msg.header.frame_id
 
         # as is
-        soln.model_name = msg.model_name
+        # soln.model_name = msg.model_name
         soln.state_dim = msg.state_dim
         soln.state_keys = msg.state_keys
         soln.control_dim = msg.control_dim
@@ -153,7 +153,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
 
-        msg.model_name = self.model_name
+        # msg.model_name = self.model_name
         msg.state_dim = self.state_dim
         msg.state_keys = self.state_keys
         msg.control_dim = self.control_dim
