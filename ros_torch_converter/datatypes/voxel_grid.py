@@ -125,13 +125,25 @@ class VoxelGridTorch(TorchCoordinatorDataType):
 
         data = points
 
-        if self.voxel_grid.features.shape[1] >= 3 and self.voxel_grid.features.shape[0] > 0:
+        # Advertise the color field from the grid's *schema*, not from whether
+        # this particular message happens to carry points. A topic that drops
+        # the `rgb` field while it is empty changes shape between messages, and
+        # RViz latches onto the fieldless version: RGB8 is not in the Color
+        # Transformer dropdown when the first message arrives, so it silently
+        # falls back to Intensity and never returns, even once real points show
+        # up. That is what made the latched query crop render as garbage colors.
+        if self.voxel_grid.features.ndim == 2 and self.voxel_grid.features.shape[1] >= 3:
             feature_keys = self.voxel_grid.feature_keys
-            labels = feature_keys.label if hasattr(feature_keys, "label") else feature_keys
-            is_rgb = all(key in labels for key in "rgb")
+            labels = list(feature_keys.label if hasattr(feature_keys, "label") else feature_keys)
+            rgb_idxs = None
+            if all(key in labels for key in ("r", "g", "b")):
+                rgb_idxs = [labels.index("r"), labels.index("g"), labels.index("b")]
 
-            if is_rgb:
-                feature_colors = self.voxel_grid.features[:, :3]
+            if rgb_idxs is not None:
+                feature_colors = self.voxel_grid.features[:, rgb_idxs]
+                if feature_colors.numel() and float(feature_colors.max()) > 1.5:
+                    feature_colors = feature_colors / 255.0
+                feature_colors = feature_colors.clamp(0.0, 1.0)
             else:
                 feature_colors = normalize_dino(self.voxel_grid.features[:, :3])
             non_feature_colors = 0.8 * torch.ones(non_feature_idxs.shape[0], 3, device=self.device)

@@ -56,8 +56,15 @@ class ImageTorch(TorchCoordinatorDataType):
     
     def from_rosmsg(msg, device='cpu'):
         res = ImageTorch(device)
-        img = res.bridge.imgmsg_to_cv2(msg)[..., :3]
-        img = torch.from_numpy(img/255.).float().to(device)
+        # Spot hand JPEG is published as bgr8 (OpenCV imdecode). Store RGB so
+        # last-write voxel channels labeled r,g,b match the camera and RViz.
+        encoding = (getattr(msg, "encoding", "") or "").split(";")[0].strip().lower()
+        if encoding in ("bgr8", "bgra8", "rgb8", "rgba8", "8uc3", "8uc4"):
+            img = res.bridge.imgmsg_to_cv2(msg, desired_encoding="rgb8")
+        else:
+            img = res.bridge.imgmsg_to_cv2(msg)
+        img = img[..., :3] if getattr(img, "ndim", 0) == 3 else img
+        img = torch.from_numpy(img / 255.0).float().to(device)
         res.image = img
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
