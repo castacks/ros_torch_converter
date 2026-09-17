@@ -85,7 +85,6 @@ class ROSTorchConverter(Node):
         self.config = config
         self.device = self.config["device"]
         self.subscribers = {}
-        self.synchronizers = []
         self.converters = {}
 
         self.data = {}
@@ -124,76 +123,35 @@ class ROSTorchConverter(Node):
 
     def _setup_synchronized_subscribers(self, sync_groups):
         for sync_config in sync_groups:
-            topic_refs = sync_config["topics"]
+            topic_names = sync_config["topics"]
             queue_size = sync_config.get("queue_size", 5)
             slop = sync_config.get("slop", 0.1)
-
-            topic_configs = []
-            topic_keys = []
-
-            for topic_ref in topic_refs:
-                topic_conf = self._resolve_topic_config(topic_ref)
-                if topic_conf is None:
-                    self.get_logger().warn(
-                        f"Sync topic {topic_ref} not found or is ambiguous"
-                    )
-                    continue
-
-                topic_key = f"{topic_conf['group']}/{topic_conf['name']}"
-                if topic_key in topic_keys or topic_key in self.synced_topics:
-                    self.get_logger().warn(
-                        f"Sync topic {topic_ref} is configured more than once"
-                    )
-                    continue
-
-                topic_keys.append(topic_key)
-                topic_configs.append(topic_conf)
-
-            if len(topic_configs) < 2:
-                self.get_logger().warn(
-                    f"Sync group {topic_refs} has fewer than two valid topics; "
-                    "using ordinary subscriptions"
-                )
-                continue
-
+            
             subscribers = []
-            for topic_key, topic_conf in zip(topic_keys, topic_configs):
+            topic_configs = []
+            
+            for topic_name in topic_names:
+                topic_conf = next((t for t in self.config["topics"] if t["name"] == topic_name), None)
+                if topic_conf is None:
+                    self.get_logger().warn(f"Sync topic {topic_name} not found in topics list")
+                    continue
+                
                 sub = Subscriber(
                     self,
-                    self.converters[topic_key].from_rosmsg_type,
+                    self.converters[topic_name].from_rosmsg_type,
                     topic_conf["topic"]
                 )
                 subscribers.append(sub)
-                self.subscribers[topic_key] = sub
-                self.synced_topics.add(topic_key)
-
-            sync = ApproximateTimeSynchronizer(
-                subscribers,
-                queue_size=queue_size,
-                slop=slop
-            )
-            sync.registerCallback(
-                lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(
-                    msgs, configs
+                topic_configs.append(topic_conf)
+                self.synced_topics.add(topic_name)
+            
+            if len(subscribers) > 1:
+                sync = ApproximateTimeSynchronizer(
+                    subscribers,
+                    queue_size=queue_size,
+                    slop=slop
                 )
-            )
-            self.synchronizers.append(sync)
-
-    def _resolve_topic_config(self, topic_ref):
-        exact_matches = [
-            topic_conf
-            for topic_conf in self.config["topics"]
-            if f"{topic_conf['group']}/{topic_conf['name']}" == topic_ref
-        ]
-        if len(exact_matches) == 1:
-            return exact_matches[0]
-
-        name_matches = [
-            topic_conf
-            for topic_conf in self.config["topics"]
-            if topic_conf["name"] == topic_ref
-        ]
-        return name_matches[0] if len(name_matches) == 1 else None
+                sync.registerCallback(lambda *msgs, configs=topic_configs: self.handle_synchronized_msgs(msgs, configs))
 
     def handle_msg(self, msg, topic_conf):
         tname = f"{topic_conf['group']}/{topic_conf['name']}"
