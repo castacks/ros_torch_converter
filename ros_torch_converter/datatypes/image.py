@@ -1,3 +1,4 @@
+import array
 import os
 import cv2
 import torch
@@ -269,7 +270,12 @@ class FeatureImageTorch(TorchCoordinatorDataType):
         msg.width = self.image.shape[1]
         msg.num_channels = self.image.shape[2]
 
-        msg.data = self.image.flatten().cpu().numpy().astype("f").tobytes()
+        # array.array, not bytes: FeatureImage.data is a uint8[] field and rclpy
+        # converts a bytes object element-wise in Python (~48 ms per MB), while an
+        # array.array is taken directly for a byte-identical payload.
+        msg.data = array.array(
+            "B", self.image.flatten().cpu().numpy().astype("f").tobytes()
+        )
         
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
