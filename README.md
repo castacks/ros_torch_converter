@@ -55,11 +55,14 @@ python3 scripts/slam_2_pcd.py --config config/kitti_config/slam_2_pcd.yaml
 
 Post-process SLAM dataset (depth, camera poses):
 ```
-python3 scripts/get_slam_data.py --dataset [dataset_dir] --config config/kitti_config/get_slam_data_rgb.yaml #_thermal
+python3 scripts/get_slam_data.py --dataset [dataset_dir] --depth --odom \
+  --config config/kitti_config/get_slam_data_rgb.yaml config/kitti_config/get_slam_data_thermal.yaml
 ```
-- run with `--idx [idx] --debug` for single frame debug and viz
-- `--resume` to resume from last processed frame
-- `--seq_to [idx]` to process a specific sequence
+- `--depth` extract depth maps, `--odom` extract camera poses 
+- `--config` accepts multiple configs to process RGB + thermal in one run
+- `--idx N` debug extracting single frame, `--idx N M` debug extracting a range
+- `--verbose` per-frame printouts, `--viz_all` all debug visualizations, `--viz_traj` just trajectory visualizations
+- `--resume` resume from last processed frame, `--seq_to N` process first N frames only
 
 Post-process thermal data (rectify, process):
 ```
@@ -68,6 +71,12 @@ python3 scripts/get_thermal_data.py --dataset [dataset_dir] --config config/kitt
 - run this if your bag doesn't already have _rect or _processed thermal topics 
 
 More details on [Slite](https://airlab.slite.com/app/docs/FAtc3skQoXn3r_).
+
+### Transforms
+
+ros_torch_converter uses the TfManager to handle transforms between different frames. It can get very confusing with different conventions. See [demo_tf_transform.py](scripts/demo_tf_transform.py) for a clear example that shows how to extract any extrinsics in the tf tree.
+
+`tf_manager.get_transform(frame_a, frame_b, timestamp)` returns the pose of frame_b expressed in frame_a, `T_{a<-b}` that maps point from frame_b into frame_a.
 
 ## Testing
 When you make changes to the datatypes, make sure this test passes:

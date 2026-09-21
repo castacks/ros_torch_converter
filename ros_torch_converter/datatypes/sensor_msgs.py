@@ -486,6 +486,7 @@ class TwistTorch(TorchCoordinatorDataType):
 
 class FFCStatusTorch:
     from_rosmsg_type = Bool
+    time_spec = TimeSpec.SYNC
 
     def __init__(self, status, stamp, frame_id, device='cpu'):
         self.status = status
