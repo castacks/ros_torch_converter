@@ -87,6 +87,74 @@ class ImageTorch(TorchCoordinatorDataType):
     def __repr__(self):
         return "ImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(self.image.shape, self.stamp, self.frame_id, self.device)
 
+class CompressedImageTorch(ImageTorch):
+    """JPEG sibling of ImageTorch, for viz topics that cross the radio link.
+
+    The full-resolution hand frame is ~900 KB as raw rgb8 and the Domo Tactical
+    link preferentially drops large samples, so the operator-context crop is
+    published a second time as JPEG. This is a separate datatype rather than a
+    flag on ImageTorch because the coordinator's ros_hooks bind one message type
+    per data key: the compressed topic is an additional key alongside the raw
+    one, so the raw topic, offline RViz and bag recording are left unchanged.
+    """
+    to_rosmsg_type = CompressedImage
+    from_rosmsg_type = CompressedImage
+
+    #: cv2 JPEG quality (0-100). 80 keeps the bbox and scene legible at roughly
+    #: a twelfth of the raw size.
+    jpeg_quality = 80
+
+    def from_torch(image):
+        if image.max() > 1.:
+            warnings.warn("Found image with value > 1. Did you convert from uint8 to float?")
+
+        res = CompressedImageTorch(device=image.device)
+        res.image = image.float()
+        return res
+
+    def from_numpy(image, device):
+        if image.max() > 1.:
+            warnings.warn("Found image with value > 1. Did you convert from uint8 to float?")
+
+        res = CompressedImageTorch(device=device)
+        res.image = torch.tensor(image, dtype=torch.float32, device=device)
+        return res
+
+    def to_rosmsg(self):
+        img = (self.image * 255.).cpu().numpy().astype(np.uint8)
+        # cv2.imencode expects BGR; self.image is RGB. Converting here rather
+        # than relying on the caller keeps the channel order in one place.
+        ok, buf = cv2.imencode(
+            '.jpg',
+            cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+            [int(cv2.IMWRITE_JPEG_QUALITY), int(self.jpeg_quality)],
+        )
+        if not ok:
+            raise RuntimeError("cv2.imencode failed for image of shape {}".format(img.shape))
+
+        img_msg = CompressedImage()
+        img_msg.format = 'jpeg'
+        img_msg.data = array.array('B', buf.tobytes())
+        img_msg.header.stamp = time_to_stamp(self.stamp)
+        img_msg.header.frame_id = self.frame_id
+        return img_msg
+
+    def from_rosmsg(msg, device='cpu'):
+        res = CompressedImageTorch(device)
+        # imdecode returns BGR; store RGB to match ImageTorch.
+        img = res.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding='rgb8')
+        img = img[..., :3] if getattr(img, "ndim", 0) == 3 else img
+        res.image = torch.from_numpy(img / 255.0).float().to(device)
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    def __repr__(self):
+        return "CompressedImageTorch of shape {} (time = {:.2f}, frame = {}, device = {})".format(
+            self.image.shape, self.stamp, self.frame_id, self.device
+        )
+
+
 class ThermalImageTorch(TorchCoordinatorDataType):
     """
     TorchCoordinator class for images
