@@ -1,5 +1,4 @@
 import os
-import yaml
 import h5py
 import array
 import torch
@@ -16,7 +15,7 @@ from physics_atv_visual_mapping.utils import normalize_dino
 from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 
 from tartandriver_utils.os_utils import load_yaml, save_yaml
-from tartandriver_utils.ros_utils import time_to_stamp, stamp_to_time
+from tartandriver_utils.ros_utils import time_to_stamp
 
 class VoxelGridTorch(TorchCoordinatorDataType):
     """
@@ -180,7 +179,10 @@ class VoxelGridTorch(TorchCoordinatorDataType):
             metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
             metadata = load_yaml(metadata_fp)
 
-            labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+            if metadata['feature_keys']:
+                labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+            else:
+                labels, metas = [], []
 
             data_fp = os.path.join(base_dir, "{:08d}_data.npz".format(idx))
             voxel_data = np.load(data_fp)
