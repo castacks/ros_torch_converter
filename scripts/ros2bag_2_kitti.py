@@ -226,6 +226,20 @@ if __name__ == '__main__':
         queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
         queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
+    # a stalled sensor resolves several frames to the same message, keep the first
+    for topic in queue['topic_times'].keys():
+        if topic in topics_to_interp:
+            continue
+
+        times = queue['topic_times'][topic]
+        dup_mask = np.zeros(len(times), dtype=bool)
+        dup_mask[1:] = times[1:] == times[:-1]
+
+        if dup_mask.any():
+            queue['topic_times'][topic][dup_mask] = np.nan
+            queue['topic_error'][topic][dup_mask] = np.inf
+            print('blanked {} duplicate frames for {}'.format(dup_mask.sum(), topic))
+
     print('keeping {}/{} potential frames.'.format(all_valid_mask.sum(), all_valid_mask.shape[0]))
     n_frames = all_valid_mask.shape[0]
 
@@ -378,5 +392,6 @@ if __name__ == '__main__':
     print('Done processing {} frames.'.format(queue['target_times'].shape[0]))
 
     for topic, idxs in checks.items():
-        valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+        expected_idxs = np.argwhere(~np.isnan(queue['topic_times'][topic])).flatten()
+        valid = np.array_equal(np.unique(idxs), expected_idxs)
         print('{} has all frames: {}'.format(topic, valid), flush=True)

@@ -489,6 +489,21 @@ if __name__ == '__main__':
         queue['topic_times'][topic] = queue['topic_times'][topic][all_valid_mask]
         queue['topic_error'][topic] = queue['topic_error'][topic][all_valid_mask]
 
+    # a stalled sensor resolves several frames to the same message, keep the first
+    interp_topics = {ci['topic'] for ci in filt_cvt_info.values() if ci['interp']}
+    for topic in queue['topic_times'].keys():
+        if topic in interp_topics:
+            continue
+
+        times = queue['topic_times'][topic]
+        dup_mask = np.zeros(len(times), dtype=bool)
+        dup_mask[1:] = times[1:] == times[:-1]
+
+        if dup_mask.any():
+            queue['topic_times'][topic][dup_mask] = np.nan
+            queue['topic_error'][topic][dup_mask] = np.inf
+            print('blanked {} duplicate frames for {}'.format(dup_mask.sum(), topic))
+
     n_frames = int(all_valid_mask.sum())
     print('keeping {}/{} potential frames.'.format(n_frames, all_valid_mask.shape[0]))
 
@@ -661,9 +676,10 @@ if __name__ == '__main__':
 
         idxs = checks.get(topic, np.array([]))
         if len(idxs) > 0:
-            valid = all(np.unique(idxs) == np.arange(all_valid_mask.sum()))
+            expected_idxs = np.argwhere(~np.isnan(queue['topic_times'][topic])).flatten()
+            valid = np.array_equal(np.unique(idxs), expected_idxs)
             status = apply_color(good_clr if valid else bad_clr, good_str if valid else bad_str)
-            frames_str = f'{len(np.unique(idxs))}/{all_valid_mask.sum()}'
+            frames_str = f'{len(np.unique(idxs))}/{len(expected_idxs)}'
         else:
             status = apply_color(bad_clr, bad_str)
             frames_str = f'0/{all_valid_mask.sum()} (NO DATA)'
