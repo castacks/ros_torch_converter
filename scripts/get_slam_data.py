@@ -362,7 +362,7 @@ def main(args):
                 cam_frame = config['camera_frame']
                 if cam_frame not in added_ned_frames:
                     print(f"Adding NED transform for {cam_frame}")
-                    tf_manager.add_static_tf(src_frame=cam_frame, dst_frame=cam_frame+'_ned', transform=cam_optical_frame2ned.numpy())
+                    tf_manager.add_static_tf(src_frame=cam_frame+'_ned', dst_frame=cam_frame, transform=cam_optical_frame2ned.numpy())
                     added_ned_frames.add(cam_frame)
 
     print(f"Dataset: {args.dataset}")
