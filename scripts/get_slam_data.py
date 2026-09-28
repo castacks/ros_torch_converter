@@ -170,8 +170,31 @@ def process_single_config(config, args, tf_manager):
     extract_odom = args.odom
     config_name = config.get('pose_output_dir', config['image_dir'])
 
-    sample_idx = args.idx[0] if args.idx is not None else 0
-    sample_img = cv2.imread(os.path.join(args.dataset, SENSORS_GROUP, config['image_dir'], f"{sample_idx:08d}.png"))
+    image_dir = os.path.join(args.dataset, SENSORS_GROUP, config['image_dir'])
+    img_files = sorted(glob.glob(os.path.join(image_dir, "*.png")))
+    frame_idxs = sorted(int(os.path.splitext(os.path.basename(x))[0]) for x in img_files)
+    if len(frame_idxs) == 0:
+        print(f"[{config_name}] No images found in {image_dir}")
+        return
+
+    # frames the sensor dropped are absent, but indices stay aligned with the rest of the dataset
+    n_frames = frame_idxs[-1] + 1
+    available_idxs = set(frame_idxs)
+
+    debug_indices = None
+    if args.idx is not None:
+        end_idx = args.idx[-1]
+        if end_idx >= n_frames:
+            print(f"[{config_name}] idx end {end_idx} out of bounds ({n_frames} frames), "
+                  f"clamping to {n_frames-1}")
+            end_idx = n_frames - 1
+        debug_indices = [i for i in range(args.idx[0], end_idx + 1) if i in available_idxs]
+        if len(debug_indices) == 0:
+            print(f"[{config_name}] No images for requested index/range {args.idx}")
+            return
+
+    sample_idx = debug_indices[0] if debug_indices is not None else frame_idxs[0]
+    sample_img = cv2.imread(os.path.join(image_dir, f"{sample_idx:08d}.png"))
     if sample_img is None:
         print(f"[{config_name}] Sample image not found for index {sample_idx}")
         return
@@ -184,8 +207,6 @@ def process_single_config(config, args, tf_manager):
     else:
         vehicle_mask = None
 
-    img_files = sorted(glob.glob(os.path.join(args.dataset, SENSORS_GROUP, config['image_dir'], "*.png")))
-
     projector = None
     if extract_depth:
         pc_dir = os.path.join(args.dataset, ODOM_GROUP, config['pointcloud_dir'])
@@ -197,22 +218,14 @@ def process_single_config(config, args, tf_manager):
             print(f"[{config_name}] Found {len(lidar_files)} lidar files")
             projector = LidarProjector(img_width=sample_img.shape[1], img_height=sample_img.shape[0], max_depth=config['max_depth'])
 
-    print(f"[{config_name}] image_dir: {config['image_dir']}, {len(img_files)} images")
+    print(f"[{config_name}] image_dir: {config['image_dir']}, {len(frame_idxs)} images"
+          + (f" ({n_frames - len(frame_idxs)} missing)" if len(frame_idxs) < n_frames else ""))
     print(f"[{config_name}] depth: {extract_depth}, odom: {extract_odom}")
     if extract_depth:
         print(f"[{config_name}] Using chain: {config['use_chain']}")
 
     # single frame / range debug
-    if args.idx is not None:
-        if len(args.idx) == 1:
-            debug_indices = [args.idx[0]]
-        else:
-            start_idx, end_idx = args.idx[0], args.idx[-1]
-            if end_idx >= len(img_files):
-                print(f"[{config_name}] idx end {end_idx} out of bounds ({len(img_files)} frames), "
-                      f"clamping to {len(img_files)-1}")
-                end_idx = len(img_files) - 1
-            debug_indices = list(range(start_idx, end_idx + 1))
+    if debug_indices is not None:
         is_range = len(debug_indices) > 1
 
         debug_dir = "debug"
@@ -284,8 +297,8 @@ def process_single_config(config, args, tf_manager):
 
         successful_depth = 0
         successful_odom = 0
-        ts_list = [None] * len(img_files)
-        pose_list = [None] * len(img_files)
+        ts_list = [None] * n_frames
+        pose_list = [None] * n_frames
         odom_poses = []
         camera_poses = []
 
@@ -296,9 +309,12 @@ def process_single_config(config, args, tf_manager):
                 odom_poses = list(odom_all)
                 print(f"[{config_name}] Loaded {len(odom_poses)} odometry poses for viz")
 
-        proc_frames = len(img_files) if args.seq_to is None else min(args.seq_to, len(img_files))
+        proc_frames = n_frames if args.seq_to is None else min(args.seq_to, n_frames)
 
         for idx in tqdm(range(proc_frames), desc=config_name):
+            if idx not in available_idxs:
+                continue
+
             image_data = load_image_for_frame(args.dataset, idx, config, device=args.device)
 
             if extract_depth:
