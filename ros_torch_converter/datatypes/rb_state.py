@@ -19,6 +19,9 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
     time_spec = TimeSpec.INTERP
+    # Use float64 for large world-frame coordinates (e.g., RTK UTM) to avoid
+    # quantization from float32 when values are on the order of 1e6.
+    state_dtype = torch.float64
     
     ##for now all interpolables have a few extra interfaces
     def to_interp(base_dir, cmdlist):
@@ -51,7 +54,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     def __init__(self, device='cpu'):
         super().__init__()
         self.child_frame_id = ""
-        self.state = torch.zeros(13, device=device)
+        self.state = torch.zeros(13, device=device, dtype=self.state_dtype)
         self.device = device
 
     def from_rosmsg(msg, device='cpu'):
@@ -71,7 +74,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
             msg.twist.twist.angular.x,
             msg.twist.twist.angular.y,
             msg.twist.twist.angular.z
-        ], device=device).float()
+        ], device=device, dtype=OdomRBStateTorch.state_dtype)
         
         res.stamp = stamp_to_time(msg.header.stamp)
         res.frame_id = msg.header.frame_id
@@ -79,7 +82,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         return res
 
     def from_numpy(data, child_frame_id, device='cpu'):
-        return OdomRBStateTorch.from_torch(torch.tensor(data, dtype=torch.float, device=device), child_frame_id)
+        return OdomRBStateTorch.from_torch(torch.tensor(data, dtype=OdomRBStateTorch.state_dtype, device=device), child_frame_id)
 
     def from_torch(data, child_frame_id):
         res = OdomRBStateTorch(device=data.device)
@@ -150,7 +153,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     def from_kitti(base_dir, idx, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
         state = np.loadtxt(fp).reshape(-1, 13)[idx]
-        state = torch.tensor(state, dtype=torch.float, device=device)
+        state = torch.tensor(state, dtype=OdomRBStateTorch.state_dtype, device=device)
 
         child_frame_id = read_info_file(base_dir, 'child_frame_id')
 
@@ -164,7 +167,7 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     def from_kitti_multi(base_dir, idxs, device='cpu'):
         fp = os.path.join(base_dir, "data.txt")
         states = np.loadtxt(fp).reshape(-1, 13)[idxs]
-        states = torch.tensor(states, dtype=torch.float, device=device)
+        states = torch.tensor(states, dtype=OdomRBStateTorch.state_dtype, device=device)
 
         stamps = read_timestamp_file(base_dir, idxs)
         frame_id = read_info_file(base_dir, 'frame_id')
@@ -175,11 +178,11 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
         return rbsts
 
     def rand_init(device='cpu'):
-        x = torch.rand(13)
+        x = torch.rand(13, device=device, dtype=OdomRBStateTorch.state_dtype)
 
         angs = np.random.rand(3) * 2*np.pi
         q = R.from_euler('xyz', angs).as_quat()
-        q = torch.tensor(q, dtype=torch.float, device=device)
+        q = torch.tensor(q, dtype=OdomRBStateTorch.state_dtype, device=device)
         x[3:7] = q
 
         rbst = OdomRBStateTorch.from_torch(x, 'random_child')

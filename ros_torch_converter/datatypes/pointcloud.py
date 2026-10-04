@@ -17,6 +17,106 @@ from physics_atv_visual_mapping.feature_key_list import FeatureKeyList
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
 from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
 
+_POINTFIELD_TO_DTYPE = {
+    PointField.INT8: np.dtype("i1"),
+    PointField.UINT8: np.dtype("u1"),
+    PointField.INT16: np.dtype("i2"),
+    PointField.UINT16: np.dtype("u2"),
+    PointField.INT32: np.dtype("i4"),
+    PointField.UINT32: np.dtype("u4"),
+    PointField.FLOAT32: np.dtype("f4"),
+    PointField.FLOAT64: np.dtype("f8"),
+}
+
+
+def _field_array_from_pointcloud2(msg, field_name):
+    fields = {f.name: f for f in msg.fields}
+    if field_name not in fields:
+        return None
+
+    field = fields[field_name]
+    if field.count != 1:
+        raise ValueError(f"Only PointField count=1 is supported for '{field_name}', got {field.count}")
+
+    if field.datatype not in _POINTFIELD_TO_DTYPE:
+        raise ValueError(f"Unsupported PointField datatype {field.datatype} for '{field_name}'")
+
+    dtype = _POINTFIELD_TO_DTYPE[field.datatype]
+    if msg.is_bigendian:
+        dtype = dtype.newbyteorder(">")
+    else:
+        dtype = dtype.newbyteorder("<")
+
+    n_points = int(msg.width) * int(msg.height)
+    if n_points == 0:
+        return np.zeros((0,), dtype=np.float64)
+
+    point_step = int(msg.point_step)
+    if point_step <= 0:
+        raise ValueError(f"Invalid point_step: {point_step}")
+
+    row_step = int(msg.row_step)
+    data_bytes = bytes(msg.data)
+
+    if int(msg.height) == 1 or row_step == point_step * int(msg.width):
+        arr = np.ndarray(
+            shape=(n_points,),
+            dtype=dtype,
+            buffer=data_bytes,
+            offset=int(field.offset),
+            strides=(point_step,),
+        )
+        return np.asarray(arr)
+
+    out = np.empty((n_points,), dtype=dtype)
+    w = int(msg.width)
+    for r in range(int(msg.height)):
+        row_start = r * row_step
+        row_buf = data_bytes[row_start: row_start + w * point_step]
+        row_arr = np.ndarray(
+            shape=(w,),
+            dtype=dtype,
+            buffer=row_buf,
+            offset=int(field.offset),
+            strides=(point_step,),
+        )
+        out[r * w: (r + 1) * w] = row_arr
+    return out
+
+
+def _extract_xyz_and_time(msg):
+    x = _field_array_from_pointcloud2(msg, "x")
+    y = _field_array_from_pointcloud2(msg, "y")
+    z = _field_array_from_pointcloud2(msg, "z")
+    if x is None or y is None or z is None:
+        raise ValueError("PointCloud2 message is missing one or more xyz fields")
+
+    point_time = None
+    for name in ("time", "t", "timestamp"):
+        point_time = _field_array_from_pointcloud2(msg, name)
+        if point_time is not None:
+            break
+    if point_time is None:
+        raise ValueError("PointCloud2 message has no time/t/timestamp field")
+
+    x = np.asarray(x, dtype=np.float32).reshape(-1)
+    y = np.asarray(y, dtype=np.float32).reshape(-1)
+    z = np.asarray(z, dtype=np.float32).reshape(-1)
+    point_time = np.asarray(point_time)
+    if np.issubdtype(point_time.dtype, np.integer):
+        point_time = point_time.astype(np.float64) * 1e-9
+    else:
+        point_time = point_time.astype(np.float64)
+
+    if not (len(x) == len(y) == len(z) == len(point_time)):
+        raise ValueError(
+            "PointCloud2 xyz/time length mismatch: "
+            f"x={len(x)}, y={len(y)}, z={len(z)}, time={len(point_time)}"
+        )
+
+    return np.stack([x, y, z, point_time.astype(np.float32)], axis=-1)
+
+
 class PointCloudTorch(TorchCoordinatorDataType):
     to_rosmsg_type = PointCloud2
     from_rosmsg_type = PointCloud2
@@ -47,7 +147,7 @@ class PointCloudTorch(TorchCoordinatorDataType):
             pts=mask_pts,
             colors=mask_colors
         )
-    
+
     def from_rosmsg(msg, device='cpu'):
         #HACK to get ros2_numpy to cooperate with rosbags dtypes.
         #TODO write a script to do this for all types
@@ -188,6 +288,132 @@ class PointCloudTorch(TorchCoordinatorDataType):
         
     def __repr__(self):
         return "PointCloudTorch of shape {} (color: {}, time = {:.2f}, frame_id = {}, device = {})".format(self.pts.shape, self.colors.shape, self.stamp, self.frame_id, self.device)
+
+
+class PointCloudWithTimeTorch(TorchCoordinatorDataType):
+    to_rosmsg_type = PointCloud2
+    from_rosmsg_type = PointCloud2
+    time_spec = TimeSpec.SYNC
+
+    def __init__(self, device):
+        super().__init__()
+        self.pts = torch.zeros(0, 4, device=device)
+        self.feature_keys = FeatureKeyList(
+            label=['x', 'y', 'z', 'time'],
+            metainfo=['raw'] * 4,
+        )
+        self.device = device
+
+    def clone(self):
+        out = PointCloudWithTimeTorch(device=self.device)
+        out.pts = self.pts.clone()
+        out.stamp = self.stamp
+        out.frame_id = self.frame_id
+        return out
+
+    def apply_mask(self, mask):
+        return PointCloudWithTimeTorch.from_torch(pts=self.pts[mask])
+
+    def from_rosmsg(msg, device='cpu'):
+        if type(msg) != PointCloud2:
+            k = (PointCloud2, False)
+            k2 = (type(msg), False)
+            ros2_numpy.registry._to_numpy[k2] = ros2_numpy.registry._to_numpy[k]
+
+        res = PointCloudWithTimeTorch(device=device)
+        points = _extract_xyz_and_time(msg)
+
+        res.pts = torch.tensor(points, dtype=torch.float32, device=device)
+        res.stamp = stamp_to_time(msg.header.stamp)
+        res.frame_id = msg.header.frame_id
+        return res
+
+    def from_numpy(pts, device='cpu'):
+        pts = np.asarray(pts)
+        if pts.ndim != 2 or pts.shape[1] < 4:
+            raise ValueError(f"Expected an (N, 4) array of [x, y, z, time], got shape {pts.shape}")
+
+        res = PointCloudWithTimeTorch(device=device)
+        res.pts = torch.tensor(pts[:, :4], dtype=torch.float32, device=device)
+        return res
+
+    def from_torch(pts):
+        res = PointCloudWithTimeTorch(device=pts.device)
+        res.pts = pts.float()
+        return res
+
+    def to_rosmsg(self):
+        points = self.pts.cpu().numpy().astype(np.float32)
+
+        msg = PointCloud2()
+        msg.height = 1
+        msg.width = points.shape[0]
+        msg.point_step = 16
+        msg.fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+            PointField(name='time', offset=12, datatype=PointField.FLOAT32, count=1),
+        ]
+
+        data = points.flatten()
+        mem_view = memoryview(data)
+        array_bytes = mem_view.cast("B") if mem_view.nbytes > 0 else b""
+
+        as_array = array.array("B")
+        as_array.frombytes(array_bytes)
+        msg.data = as_array
+
+        msg.header.stamp = time_to_stamp(self.stamp)
+        msg.header.frame_id = self.frame_id
+        return msg
+
+    def to_kitti(self, base_dir, idx):
+        update_timestamp_file(base_dir, idx, self.stamp)
+        update_info_file(base_dir, 'frame_id', self.frame_id)
+
+        save_fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
+        np.save(save_fp, self.pts.cpu().numpy())
+
+    def from_kitti(base_dir, idx, device='cpu'):
+        fp = os.path.join(base_dir, "{:08d}.npy".format(idx))
+
+        pts = np.load(fp)
+        pc = PointCloudWithTimeTorch(device=device)
+        pc.pts = torch.tensor(pts[:, :4], device=device).float()
+        pc.stamp = read_timestamp_file(base_dir, idx)
+        pc.frame_id = read_info_file(base_dir, 'frame_id')
+
+        return pc
+
+    def rand_init(device='cpu'):
+        pts = torch.rand(10000, 4, device=device)
+
+        pct = PointCloudWithTimeTorch.from_torch(pts)
+        pct.frame_id = 'random'
+        pct.stamp = np.random.rand()
+
+        return pct
+
+    def __eq__(self, other):
+        if not isinstance(other, PointCloudWithTimeTorch):
+            return False
+
+        if self.frame_id != other.frame_id:
+            return False
+
+        if abs(self.stamp - other.stamp) > 1e-8:
+            return False
+
+        return torch.allclose(self.pts, other.pts)
+
+    def to(self, device):
+        self.device = device
+        self.pts = self.pts.to(device)
+        return self
+
+    def __repr__(self):
+        return "PointCloudWithTimeTorch of shape {} (time = {:.2f}, frame_id = {}, device = {})".format(self.pts.shape, self.stamp, self.frame_id, self.device)
 
 class FeaturePointCloudTorch(TorchCoordinatorDataType):
     """
