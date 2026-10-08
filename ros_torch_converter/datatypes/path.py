@@ -59,8 +59,8 @@ class PathTorch(TorchCoordinatorDataType):
 
         for _pose in self.poses:
             _path_pose = PoseStamped()
-            _path_pose.stamp = msg.header.stamp
-            _path_pose.frame_id = msg.header.frame_id
+            _path_pose.header.stamp = msg.header.stamp
+            _path_pose.header.frame_id = msg.header.frame_id
 
             _path_pose.pose.position.x = _pose[0].item()
             _path_pose.pose.position.y = _pose[1].item()

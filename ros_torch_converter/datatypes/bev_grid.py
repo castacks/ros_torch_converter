@@ -180,37 +180,38 @@ class BEVGridTorch(TorchCoordinatorDataType):
 
             gridmap_msg.data.append(gridmap_layer_msg)
 
-        # add dummy elevation
-        gridmap_msg.layers.append("elevation")
-        layer_data = (
-            np.zeros_like(gridmap_data[..., 0])
-        )
-        gridmap_layer_msg = Float32MultiArray()
-        gridmap_layer_msg.layout.dim.append(
-            MultiArrayDimension(
-                label="column_index",
-                size=layer_data.shape[0],
-                stride=layer_data.shape[0],
+        # add dummy elevation (only when the grid does not carry a real one)
+        if "elevation" not in gridmap_msg.layers:
+            gridmap_msg.layers.append("elevation")
+            layer_data = (
+                np.zeros_like(gridmap_data[..., 0])
             )
-        )
-        gridmap_layer_msg.layout.dim.append(
-            MultiArrayDimension(
-                label="row_index",
-                size=layer_data.shape[0],
-                stride=layer_data.shape[0] * layer_data.shape[1],
+            gridmap_layer_msg = Float32MultiArray()
+            gridmap_layer_msg.layout.dim.append(
+                MultiArrayDimension(
+                    label="column_index",
+                    size=layer_data.shape[0],
+                    stride=layer_data.shape[0],
+                )
             )
-        )
+            gridmap_layer_msg.layout.dim.append(
+                MultiArrayDimension(
+                    label="row_index",
+                    size=layer_data.shape[0],
+                    stride=layer_data.shape[0] * layer_data.shape[1],
+                )
+            )
 
-        # 2. slow tolist()
-        # gridmap_layer_msg.data = layer_data.flatten().tolist()
-        gridmap_layer_msg.data = array.array('f', [0] * bev_size)
-        tmp = layer_data.flatten()
-        ros2_numpy_cpp.npcpp_deepcopy(
-            np.ascontiguousarray(tmp),
-            gridmap_layer_msg.data.buffer_info()[0],
-            tmp.shape[0]
-        )                    
-        gridmap_msg.data.append(gridmap_layer_msg)
+            # 2. slow tolist()
+            # gridmap_layer_msg.data = layer_data.flatten().tolist()
+            gridmap_layer_msg.data = array.array('f', [0] * bev_size)
+            tmp = layer_data.flatten()
+            ros2_numpy_cpp.npcpp_deepcopy(
+                np.ascontiguousarray(tmp),
+                gridmap_layer_msg.data.buffer_info()[0],
+                tmp.shape[0]
+            )                    
+            gridmap_msg.data.append(gridmap_layer_msg)
 
         # TODO: figure out how to support multiple viz output types
         is_rgb = all([k in self.bev_grid.feature_keys.label for k in 'rgb'])

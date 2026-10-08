@@ -19,6 +19,12 @@ class OdomRBStateTorch(TorchCoordinatorDataType):
     to_rosmsg_type = Odometry
     from_rosmsg_type = Odometry
     time_spec = TimeSpec.INTERP
+<<<<<<< Updated upstream
+=======
+    # Use float64 for large world-frame coordinates (e.g., RTK UTM) to avoid
+    # quantization from float32 when values are on the order of 1e6.
+    state_dtype = torch.float32
+>>>>>>> Stashed changes
     
     ##for now all interpolables have a few extra interfaces
     def to_interp(base_dir, cmdlist):
