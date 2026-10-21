@@ -46,7 +46,7 @@ class ImuTorch(TorchCoordinatorDataType):
         data = np.loadtxt(data_fp).reshape(-1, 10)
         timestamps = np.loadtxt(timestamp_fp)
 
-        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, mask=IMU_MASK, tol=tol)
+        interp = MultiDimensionalInterpolator(traj=data, times=timestamps, rot_mask=IMU_MASK, tol=tol)
         data = interp(target_timestamp)
 
         out = ImuTorch.from_numpy(data).to(device)
