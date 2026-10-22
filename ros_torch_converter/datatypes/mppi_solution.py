@@ -10,6 +10,8 @@ from control_interfaces.msg import MPPISolution
 
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
+NO_NAME = 'No Name'
+
 class MPPISolutionTorch(TorchCoordinatorDataType):
     """
     Coordinator type for MPC Solutions.
@@ -22,6 +24,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         super().__init__()
         self.stamp = None
         self.frame_id = None
+        self.model_name = NO_NAME
         self.state_dim = None
         self.state_keys = None
         self.control_dim = None
@@ -55,6 +58,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
             solution_states,
             solution_controls,
             k=0,
+            model_name=NO_NAME,
             random_states=None,
             random_controls=None,
         ):
@@ -74,6 +78,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
             solution_states: HxN FloatTensor of solution states
             solution_controls: HxM FloatTensor of solution controls
             k: (optional) int of random trajs for viz
+            model_name: (optional) str of the dynamics model used
             random_states: (optional) KxHxM FloatTensor of random states
             random_controls: (optional) KxHxN FloatTensor of random controls
         """
@@ -93,6 +98,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
         soln = MPPISolutionTorch(device=device)
 
+        soln.model_name = model_name
         soln.state_dim = state_dim
         soln.state_keys = state_keys
         soln.control_dim = control_dim
@@ -124,6 +130,8 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         soln.frame_id = msg.header.frame_id
 
         # as is
+        # older MPPISolution msg defs don't have model_name
+        soln.model_name = getattr(msg, 'model_name', NO_NAME)
         soln.state_dim = msg.state_dim
         soln.state_keys = msg.state_keys
         soln.control_dim = msg.control_dim
@@ -149,6 +157,8 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         msg.header.stamp = time_to_stamp(self.stamp)
         msg.header.frame_id = self.frame_id
 
+        if hasattr(msg, 'model_name'): # older MPPISolution msg defs don't have model_name
+            msg.model_name = self.model_name if self.model_name is not None else NO_NAME
         msg.state_dim = self.state_dim
         msg.state_keys = self.state_keys
         msg.control_dim = self.control_dim
@@ -253,6 +263,8 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         update_info_file(base_dir, 'frame_id', self.frame_id)
 
         data = {
+            # store as str so npz doesn't need pickling for None
+            'model_name': self.model_name if self.model_name is not None else NO_NAME,
             'state_dim': self.state_dim,
             'state_keys': self.state_keys,
             'control_dim': self.control_dim,
@@ -290,6 +302,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         data['state_keys'] = list(data['state_keys'])
         data['control_keys'] = list(data['control_keys'])
         data['cost_terms'] = list(data['cost_terms'])
+        data['model_name'] = str(data.get('model_name', NO_NAME))
 
         soln = MPPISolutionTorch.from_torch(**data)
 
@@ -310,6 +323,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
         term_feas = torch.randint(0,2,size=(nterms,), device=device).bool()
 
         data = {
+            'model_name': 'general_kenobi',
             'state_dim': n,
             'state_keys': ["".join(random.sample(string.ascii_letters, 5)) for _ in range(n)],
             'control_dim': m,
@@ -336,6 +350,8 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
     def __eq__(self, other):
         if self.frame_id != other.frame_id:
+            return False
+        if self.model_name != other.model_name:
             return False
 
         if abs(self.stamp - other.stamp) > 1e-8:
@@ -387,7 +403,7 @@ class MPPISolutionTorch(TorchCoordinatorDataType):
 
     def __repr__(self):
         return (
-            "MPPISolutionTorch with stamp={:.2f} frame_id={} soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
-                self.stamp, self.frame_id, self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
+            "MPPISolutionTorch with stamp={:.2f} frame_id={} model_name={} soln cost={}, soln feas={}, h={}, dt={}, k={}, N={}, M={}, device {}".format(
+                self.stamp, self.frame_id, self.model_name, self.solution_cost, self.solution_feasible, self.h, self.dt, self.k, self.state_dim, self.control_dim, self.device
             )
         )
