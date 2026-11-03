@@ -47,6 +47,8 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
         self.surface_type = torch.zeros(0, dtype=torch.int32, device=device)
         # Inclination in degrees; carried for viz. 0 at voxels we never classified.
         self.inclination_deg = torch.zeros(0, dtype=torch.float32, device=device)
+        # Upward unit surface normals (M, 3), n_z >= 0; the planner's slope direction.
+        self.normals = torch.zeros(0, 3, dtype=torch.float32, device=device)
         # Roughness (meters): std of signed distance to best-fit PCA plane of
         # the local kernel_size^3 neighborhood. 0 at voxels we never classified.
         self.roughness = torch.zeros(0, dtype=torch.float32, device=device)
@@ -84,6 +86,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
         else:
             incl = incl.to(device=device, dtype=torch.float32)
         res.inclination_deg = incl
+        res.normals = drivable_result.normals_up.to(device=device, dtype=torch.float32)
         
         rough_src = getattr(drivable_result, "roughness", None)
         if rough_src is None or rough_src.numel() != n_vox:
@@ -136,6 +139,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
         rough = np.ascontiguousarray(
             self.roughness.detach().cpu().numpy().astype(np.float32)
         )
+        normals = self.normals.detach().cpu().numpy().astype(np.float32)
 
         msg.num_voxels = int(cost.shape[0])
         # rclpy requires array.array for typed []: use frombytes() for a C-speed
@@ -157,6 +161,10 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
         rough_a = array.array("f")
         rough_a.frombytes(rough.tobytes())
         msg.roughness = rough_a
+        for k, field in enumerate(("normal_x", "normal_y", "normal_z")):
+            a = array.array("f")
+            a.frombytes(np.ascontiguousarray(normals[:, k]).tobytes())
+            setattr(msg, field, a)
         return msg
 
     @staticmethod
@@ -190,6 +198,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
             res.surface_type = torch.zeros(0, dtype=torch.int32, device=device)
             res.inclination_deg = torch.zeros(0, dtype=torch.float32, device=device)
             res.roughness = torch.zeros(0, dtype=torch.float32, device=device)
+            res.normals = torch.zeros(0, 3, dtype=torch.float32, device=device)
         else:
             gi = np.frombuffer(bytes(msg.grid_indices_flat), dtype=np.int32).reshape(-1, 3)
             res.grid_indices = torch.from_numpy(gi.astype(np.int64)).to(device)
@@ -216,6 +225,9 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
                 res.roughness = torch.from_numpy(
                     np.frombuffer(bytes(rough_src), dtype=np.float32).astype(np.float32)
                 ).to(device)
+            res.normals = torch.from_numpy(np.stack(
+                [np.frombuffer(bytes(getattr(msg, f)), dtype=np.float32) for f in ("normal_x", "normal_y", "normal_z")],
+                axis=1).astype(np.float32)).to(device)
         res.frame_id = msg.header.frame_id
         return res
 
@@ -248,7 +260,7 @@ class VoxelCostFieldTorch(TorchCoordinatorDataType):
         for attr in (
             "origin", "length", "resolution", "N",
             "grid_indices", "cost", "flags", "surface_type", "inclination_deg",
-            "roughness",
+            "roughness", "normals",
         ):
             t = getattr(self, attr)
             if isinstance(t, torch.Tensor):
