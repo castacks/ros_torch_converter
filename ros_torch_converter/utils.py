@@ -1,3 +1,4 @@
+import io
 import os
 import yaml
 import numpy as np
@@ -63,6 +64,23 @@ def update_timestamp_file(base_dir, idx, stamp, file='timestamps.txt'):
     timestamps[idx] = stamp
     with open(timestamp_fp, 'w') as f:
         np.savetxt(f, timestamps)
+
+def read_npy_zst(fp):
+    """
+    Read a zstd-compressed .npy file
+
+    Args:
+        fp (str): path to the .npy.zst file
+    Returns:
+        data (ndarray): the array as saved, read-only
+    """
+    import zstandard
+    raw = zstandard.ZstdDecompressor().decompress(open(fp, 'rb').read())
+    f = io.BytesIO(raw)
+    version = np.lib.format.read_magic(f)
+    shape, fortran, dtype = np.lib.format._read_array_header(f, version)
+    assert not fortran, "fortran-ordered .npy not supported"
+    return np.frombuffer(raw, dtype=dtype, offset=f.tell()).reshape(shape)
 
 def read_timestamp_file(base_dir, idx, allow_missing=True, file='timestamps.txt'):
     timestamp_fp = os.path.join(base_dir, file)

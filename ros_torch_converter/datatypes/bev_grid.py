@@ -11,7 +11,7 @@ import numpy as np
 import ros2_numpy_cpp
 
 from ros_torch_converter.datatypes.base import TorchCoordinatorDataType, TimeSpec
-from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file
+from ros_torch_converter.utils import update_info_file, update_timestamp_file, read_info_file, read_timestamp_file, read_npy_zst
 
 from physics_atv_visual_mapping.localmapping.bev.bev_localmapper import BEVGrid
 from physics_atv_visual_mapping.localmapping.metadata import LocalMapperMetadata
@@ -310,6 +310,7 @@ class BEVGridTorch(TorchCoordinatorDataType):
     def from_kitti(base_dir, idx, device='cpu'):
         ## load data from file
         h5_fp = os.path.join(base_dir, "{:08d}_data.hdf5".format(idx))
+        zst_fp = os.path.join(base_dir, "{:08d}_data.npy.zst".format(idx))
 
         if os.path.exists(h5_fp):
             with h5py.File(h5_fp, "r") as h5_fp:
@@ -317,6 +318,14 @@ class BEVGridTorch(TorchCoordinatorDataType):
                 labels = [x.decode() for x in h5_fp['feature_keys']['label']]
                 metas = [x.decode() for x in h5_fp['feature_keys']['metainfo']]
                 data = np.array(h5_fp["data"])
+        elif os.path.exists(zst_fp):
+            # zstd-compressed .npy, metadata in the same yaml as the plain .npy
+            metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
+
+            metadata = yaml.safe_load(open(metadata_fp))
+            labels, metas = zip(*[s.split(', ') for s in metadata['feature_keys']])
+
+            data = read_npy_zst(zst_fp)
         else:
             data_fp = os.path.join(base_dir, "{:08d}_data.npy".format(idx))
             metadata_fp = os.path.join(base_dir, "{:08d}_metadata.yaml".format(idx))
