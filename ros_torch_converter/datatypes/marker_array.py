@@ -10,6 +10,7 @@ from ros_torch_converter.utils import (
 
 from visualization_msgs.msg import Marker, MarkerArray
 from geometry_msgs.msg import Point
+from std_msgs.msg import ColorRGBA
 from tartandriver_utils.ros_utils import stamp_to_time, time_to_stamp
 
 
@@ -34,12 +35,17 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
 
         # Multi-point markers (list of (Ni x 3) torch tensors)
         self.line_points = []  # None if not a line marker
+        # Optional per-vertex RGBA for line markers (list of (Ni x 4) tensors or None);
+        # RViz colours each vertex and interpolates along the segment
+        self.line_colors = []
 
         # Per-marker attributes
         self.colors = torch.zeros(0, 4, device=device)
         self.scales = torch.zeros(0, 3, device=device)
         self.types = torch.zeros(0, dtype=torch.long, device=device)
         self.ns = []  # list of strings
+        # Text of TEXT_VIEW_FACING markers (list of str or None per marker; scale z = text height)
+        self.texts = []
 
         self.orientations = None
 
@@ -56,10 +62,16 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                    scales=None,
                    types=None,
                    ns=None,
-                   line_points=None):
+                   line_points=None,
+                   line_colors=None,
+                   texts=None):
         """
         points: (N,3) tensor used for single-position markers
         line_points: list of tensors, each Mx3, for LINE_STRIP markers
+        line_colors: optional list of tensors, each Mx4 RGBA, per-vertex colours
+                     for the matching line_points entry (None = marker colour)
+        texts: optional list of str (or None), the text of TEXT_VIEW_FACING markers
+               (positioned at `points`, height = scale z)
         """
 
         device = points.device
@@ -81,6 +93,18 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
             assert len(line_points) == N
             mat.line_points = line_points
 
+        if line_colors is None:
+            mat.line_colors = [None] * N
+        else:
+            assert len(line_colors) == N
+            mat.line_colors = line_colors
+
+        if texts is None:
+            mat.texts = [None] * N
+        else:
+            assert len(texts) == N
+            mat.texts = list(texts)
+
         return mat
 
     # ----------------------------------------------------------------------
@@ -92,6 +116,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
 
         for m in msg.markers:
             mat.ns.append(m.ns)
+            mat.texts.append(m.text if m.type == Marker.TEXT_VIEW_FACING else None)
             mat.types = torch.cat([mat.types, torch.tensor([m.type], device=device)])
 
             # Color
@@ -113,6 +138,10 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                     device=device
                 ).float()
                 mat.line_points.append(pts)
+                mat.line_colors.append(torch.tensor(
+                    [[c.r, c.g, c.b, c.a] for c in m.colors],
+                    device=device
+                ).float() if len(m.colors) > 0 else None)
 
                 # Dummy single point for compatibility
                 mat.points = torch.cat([
@@ -131,6 +160,7 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
 
                 mat.points = torch.cat([mat.points, new_pt], dim=0)
                 mat.line_points.append(None)
+                mat.line_colors.append(None)
 
         if msg.markers:
             mat.stamp = stamp_to_time(msg.markers[0].header.stamp)
@@ -172,8 +202,14 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                 if pts is None:
                     continue  # invalid
 
-                for p in pts:
+                for p in pts.tolist():
                     m.points.append(Point(x=float(p[0]), y=float(p[1]), z=float(p[2])))
+
+                cols = self.line_colors[i] if i < len(self.line_colors) else None
+                if cols is not None:
+                    assert len(cols) == len(pts), "line_colors must match line_points per marker"
+                    m.colors = [ColorRGBA(r=float(c[0]), g=float(c[1]), b=float(c[2]), a=float(c[3]))
+                                for c in cols.tolist()]
 
             else:
                 # Single-pose marker
@@ -182,6 +218,9 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
                 m.pose.position.y = float(pt[1])
                 m.pose.position.z = float(pt[2])
                 m.pose.orientation.w = 1.0
+                texts = getattr(self, "texts", None)
+                if m.type == Marker.TEXT_VIEW_FACING and texts and i < len(texts) and texts[i] is not None:
+                    m.text = str(texts[i])
 
             if self.orientations is not None and self.orientations[i] is not None:
                 q = self.orientations[i]
@@ -275,6 +314,9 @@ class MarkerArrayTorch(TorchCoordinatorDataType):
         self.types = self.types.to(device)
         self.line_points = [
             None if lp is None else lp.to(device) for lp in self.line_points
+        ]
+        self.line_colors = [
+            None if lc is None else lc.to(device) for lc in self.line_colors
         ]
         return self
 
